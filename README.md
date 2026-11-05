@@ -161,18 +161,22 @@ MOB-suite cluster has 1,703.
 
 If you split train/test at random, a plasmid and its 40 near-identical siblings
 end up on both sides, and the model gets graded on sequences it has effectively
-memorised. We measured it on this exact dataset:
+memorised. Measured on this dataset:
 
-```
-random 5-fold CV     R² = 0.485      <-- wrong, and meaningless
-grouped 5-fold CV    R² = 0.078      <-- real
-                     inflation = +0.407
-```
+| Training set | Random CV R² | Grouped CV R² | Inflation |
+|---|---|---|---|
+| 326 lineages | 0.485 | 0.078 | **+0.407** |
+| 4,425 lineages | 0.231 | 0.168 | +0.063 |
 
-**Put that comparison on a slide.** It is the most convincing methods point
-available to you, it takes ten seconds to explain, and most hackathon projects
-will have the inflated number without knowing it. Reproduce it with
-`python train.py --random-cv-demo`.
+**Quote the right one.** The effect is dramatic on small training sets and
+modest on large ones — with more lineages there are proportionally fewer
+sibling pairs straddling any given split. Do not quote the +0.407 next to the
+4,425-lineage headline result; they come from different runs. The honest
+version is the table.
+
+**Put the comparison on a slide anyway.** It takes ten seconds to explain, and
+most hackathon projects will be reporting the inflated number without knowing
+it. Reproduce with `python train.py --random-cv-demo`.
 
 Groups come from three sources, in priority order:
 
@@ -320,57 +324,107 @@ A uniform draw returns mostly mid-range lineages. Sampling whole groups
 stratified by label decile gives a usable spread: mean 71.5, SD 19.5, range
 17.2–100.0.
 
-### My actual recommendation: run 1,000 first, then scale up immediately
+### My actual recommendation: run 1,000 first, then scale up
 
-I ran both. The comparison is the most useful result in this repo:
+Build the 1,000-plasmid version first to have an end-to-end result early, then
+run the full Enterobacterales set. It is data-limited — see the learning curve
+in §7 — so the extra lineages genuinely buy performance.
 
-| training set | lineages | plasmids | R² (grouped CV) | Spearman ρ |
-|---|---|---|---|---|
-| `--subset 1000` | 326 | 1,007 | 0.078 | 0.373 |
-| all Enterobacterales | **4,175** | 13,919 | **0.241** | **0.402** |
-
-**Tripling R² by adding lineages means you are data-limited, not
-signal-limited.** The backbone genuinely carries information about
-dissemination; 326 lineages is just not enough to extract it.
-
-So: build the 1,000-plasmid version first to have an end-to-end result early,
-then run the full set — it takes about ten minutes and costs you nothing. Show
-both. "We checked whether we were data-limited, and we were" is a better slide
-than either number alone.
+**A warning about how you compare those two runs.** `train.py` scales model
+capacity to the lineage count, so a naive 1,000-vs-all comparison confounds
+capacity with data volume and can point the wrong way. Use
+`learning_curve.py`, which holds the model fixed and varies only the number of
+lineages. We got this wrong once before catching it; the script exists so you
+do not repeat it.
 
 ---
 
 ## 7. Results
 
-**1,000-plasmid subset — 326 lineages**
+### Which label? Taxonomic beats the full one — and that is the finding
+
+All four combinations, grouped 5-fold CV, Enterobacterales:
+
+| Label | Lineages | R² | Spearman ρ |
+|---|---|---|---|
+| full (+ country, One-Health, time) | 331 | −0.000 | 0.250 |
+| full | 4,425 | 0.060 | 0.266 |
+| **taxonomic** | 333 | **0.152** | **0.390** |
+| **taxonomic** | 4,425 | 0.128 | 0.362 |
+
+The richer, more epidemiologically meaningful label is **harder** to predict
+from the backbone, not easier. That is not a bug, it is the result, and it has
+a clean biological reading:
+
+> **Whether a plasmid turned up in Spain or in Taiwan is not encoded in its
+> replicon.** The backbone determines dissemination *potential*; realised
+> spread also depends on where outbreaks happened and who did the sequencing.
+
+This is a good slide, and it independently justifies the whole architecture:
+it is exactly why risk is split into a learned vehicle term and a looked-up
+cargo term, rather than predicted end-to-end.
+
+Use `--label taxonomic` for the model. Keep the country / One-Health / time
+statistics — they are computed either way and are what make the *output*
+interpretable to an epidemiologist, even though they do not belong in the
+training target.
+
+### Are we data-limited? Yes — but you have to measure it properly
+
+`train.py` scales model capacity with lineage count, so comparing a small run
+against a large one confounds capacity with data volume. `learning_curve.py`
+holds the model fixed. R² / Spearman ρ:
+
+| Lineages | Rows | small | medium | large |
+|---|---|---|---|---|
+| 200 | 741 | **+0.061** / 0.296 | −0.077 / 0.246 | −0.140 / 0.241 |
+| 400 | 1,517 | **+0.069** / 0.312 | −0.061 / 0.277 | −0.199 / 0.236 |
+| 800 | 3,033 | **+0.105** / 0.319 | +0.024 / 0.297 | −0.112 / 0.257 |
+| 1,600 | 6,067 | **+0.148** / 0.365 | +0.130 / 0.364 | +0.042 / 0.339 |
+| 3,200 | 11,145 | **+0.149** / 0.367 | +0.140 / 0.363 | +0.078 / 0.335 |
+| 4,425 | 14,450 | +0.160 / 0.379 | **+0.168** / 0.386 | +0.128 / 0.362 |
+
+Two conclusions:
+
+1. **Performance rises monotonically with lineages** (+0.061 → +0.160 at fixed
+   small capacity). More lineages are worth having; the curve has not
+   flattened. A better grouping from PLING should help for the same reason.
+2. **The "large" capacity rung was wrong and has been removed.** It is worse at
+   every single training size. `make_model()` now has two rungs and a comment
+   recording the measurement, so nobody adds it back on a hunch.
+
+### Headline numbers
+
+`--label taxonomic`, all Enterobacterales, 4,425 lineages / 14,450 plasmids,
+medium capacity, grouped 5-fold CV:
 
 ```
-Grouped 5-fold CV:   R² = 0.078    MAE = 14.6    Spearman ρ = 0.373
-  mean only          R² = -0.001                 ρ = -0.043
-  size only          R² = -0.044                 ρ = +0.066
-  size + GC + mob    R² = -0.152                 ρ = +0.171
-  FULL MODEL         R² = +0.078                 ρ = +0.373
+  FULL MODEL         R² = +0.168   MAE = 15.52   ρ = +0.386
+  size + GC + mob    R² = +0.087   MAE = 16.03   ρ = +0.299
+  size only          R² = +0.029   MAE = 16.48   ρ = +0.201
+  mean only          R² = -0.000   MAE = 17.08   ρ = -0.023
+
+  model adds R² +0.139 over plasmid size alone
 ```
 
-**All Enterobacterales — 4,175 lineages, 13,919 plasmids**
+This matches the learning curve's prediction for this cell exactly (+0.168 /
+0.386), which is a reassuring consistency check rather than a new result.
 
-```
-Grouped 5-fold CV:   R² = 0.241    MAE = 14.2    Spearman ρ = 0.402
-  mean only          R² = -0.000                 ρ = -0.010
-  size only          R² = +0.020                 ρ = +0.157
-  FULL MODEL         R² = +0.241                 ρ = +0.402
-  model adds R² +0.221 over size alone
-```
+Top features by permutation importance: `log_size`, `gc`, `n_rep_types`,
+`n_inc_groups`, then specific backbone types — `MPF_T`, `IncU`, `MOBQ`,
+`IncQ1`, `IncX1`, `mobilizable`. That the mating-pair-formation type and the
+MOBQ/IncQ mobilisable machinery surface above most individual replicons is a
+reassuring sanity check: the model is reading transfer machinery, which is
+what the whole framing claims it should be reading.
 
-**Read this honestly.** ρ ≈ 0.40 on held-out lineages is a real but modest
-signal. The model is not a finished predictor. What it *is*:
+**Read the result honestly.** ρ ≈ 0.39 on held-out lineages is a real but
+modest signal. The model is not a finished predictor. What it *is*:
 
-* genuinely better than every baseline, including plasmid size alone (+0.22 R²)
-  — so it is a plasmid model, not a ruler
+* genuinely better than every baseline, including plasmid size alone (size-only
+  manages ρ ≈ 0.19) — so it is a plasmid model, not a ruler
 * evaluated in a way most of the room will not have bothered with
-* clearly still data-limited: R² tripled from 326 → 4,175 lineages, so the
-  curve has not flattened and more lineages (or PLING's better grouping) should
-  help further
+* still climbing with data, with an honest measurement of that rather than an
+  assertion
 
 Top features by permutation importance: `n_rep_types`, `log_size`, `gc`,
 `n_inc_groups`, `rep__IncC`, `mob__MOBQ`, `n_relaxases`, `has_orit`,
@@ -523,4 +577,24 @@ plrisk/cargo.py      AMR severity, two-annotator deduplication
 build_dataset.py     step 1 — assemble everything, mark the training subset
 train.py             step 2 — grouped CV, baselines, importance, final fit
 score.py             step 3 — score a new plasmid
+figures.py           step 4 — the five slide figures
+learning_curve.py    diagnostic — data-limited or signal-limited?
 ```
+
+## Three mistakes we made, so you do not repeat them
+
+Kept here deliberately. Each one produced a confident wrong number before it
+was caught, and each is easy to make again.
+
+1. **`early_stopping=True` on a dataset full of near-duplicates.** sklearn's
+   internal validation split is random, so siblings of the training rows land
+   in it, the internal score keeps improving while generalisation degrades,
+   and early stopping never fires. Produced R² = −0.30 — worse than predicting
+   the mean. Now disabled, with capacity bounded directly instead.
+2. **Comparing runs of different model capacity and calling it a data effect.**
+   The 1,000-vs-all comparison looked like proof of being data-limited; it was
+   partly the capacity ladder changing underneath. `learning_curve.py` exists
+   to make that comparison correctly.
+3. **Classifying carbapenemases with a regex on gene names.** OXA numbering is
+   not systematic; OXA-72 and OXA-437 were silently scored as ordinary
+   beta-lactamases. Severity now comes from the curated drug classes.
