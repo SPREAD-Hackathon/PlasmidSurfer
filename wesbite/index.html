@@ -63,8 +63,6 @@
               resize: vertical; }
   #blastStatus { margin-top: 10px; font-size: 13px; }
   #blastStatus.err { color: #b3261e; }
-  .server-off { background: #fff6e5; border: 1px solid #f0d9a8; border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 13px; }
-  .server-off code { background: #fff; padding: 1px 4px; border-radius: 4px; }
   table.hits { margin-top: 14px; font-size: 13px; }
   table.hits th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 4px 8px 4px 0;
                   border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -109,13 +107,7 @@
   <div class="dialog" role="dialog" aria-labelledby="blastTitle">
     <button class="x" id="blastClose" aria-label="Close">×</button>
     <h2 id="blastTitle">BLAST a plasmid sequence</h2>
-    <p class="hint" style="margin:0">Runs <b>blastn</b> (megablast) against all plasmid sequences in the database and lists the best hits. Click a hit to find it in the graph, or show all hits at once.</p>
-    <div id="serverOff" class="server-off" hidden>
-      The BLAST search needs the small BLAST server, and this page was opened without it.
-      For the <i>Klebsiella</i> view, double-click <code>start_klebsiella.command</code> in the <code>explorer</code> folder; it starts the server and opens the page at <code>http://localhost:8000</code>.
-      Otherwise run <code>python3 server.py --web &lt;folder&gt; --db &lt;database&gt;</code> (see the README) and open <code>http://localhost:8000</code>.
-      Opening <code>index.html</code> directly from disk shows the graph only.
-    </div>
+    <p class="hint" style="margin:0">Runs <b>blastn</b> (megablast) against NCBI databases and lists the best hits. Click a hit to find it in the graph, or show all hits at once.</p>
     <textarea id="blastSeq" spellcheck="false" placeholder=">my_plasmid&#10;Paste a DNA sequence or FASTA record here, or choose a file below"></textarea>
     <div class="row">
       <input type="file" id="blastFile" accept=".fa,.fasta,.fna,.fas,.txt,.seq">
@@ -410,7 +402,7 @@
   // ---------- BLAST ----------
   const $ = id => document.getElementById(id);
   const fmtE = e => e === 0 ? "0" : (+e).toExponential(1);
-  let lastResult = null, blastOnline = false;
+  let lastResult = null;
 
   function showHitsPanel() {
     const list = [...hits.values()].sort((x, y) => x.rank - y.rank);
@@ -428,7 +420,7 @@
 
   function showHitsInGraph(focusId) {
     hits = new Map();
-    lastResult.hits.forEach((h, i) => { if (graph.hasNode(h.plasmid)) hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h)); });
+    lastResult.hits.forEach((h, i) => { if (h.in_graph) hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h)); });
     $("blastModal").hidden = true;
     if (focusId) { select(focusId, true); return; }
     select(null);
@@ -441,7 +433,7 @@
   }
 
   function renderResults(res) {
-    const inGraph = res.hits.filter(h => graph.hasNode(h.plasmid)).length;
+    const inGraph = res.hits.filter(h => h.in_graph).length;
     $("blastStatus").className = "hint";
     const filt = (res.min_identity || res.min_coverage)
       ? ` · filters: identity ≥ ${res.min_identity}%, query cover ≥ ${res.min_coverage}% (${res.before_filter} hits before filtering)` : "";
@@ -469,18 +461,119 @@
   async function runBlast() {
     const seq = $("blastSeq").value;
     if (!seq.trim()) { $("blastStatus").className = "err"; $("blastStatus").textContent = "Paste a sequence or choose a file first."; return; }
-    $("blastRun").disabled = true; $("blastStatus").className = "hint";
-    $("blastStatus").textContent = "Running blastn…"; $("blastResults").innerHTML = "";
+    
+    $("blastRun").disabled = true; 
+    $("blastStatus").className = "hint";
+    $("blastStatus").textContent = "Submitting sequence to NCBI..."; 
+    $("blastResults").innerHTML = "";
+    
     try {
-      const r = await fetch("api/blast", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sequence: seq, max_hits: +$("blastMax").value,
-          min_identity: +$("blastMinId").value || 0, min_coverage: +$("blastMinCov").value || 0 }) });
-      const res = await r.json();
-      if (!r.ok) throw new Error(res.error || r.statusText);
-      lastResult = res; renderResults(res);
+      const putParams = new URLSearchParams({
+        CMD: "Put",
+        PROGRAM: "blastn",
+        DATABASE: "nt",
+        ENTREZ_QUERY: "plasmid[filter]",
+        QUERY: seq
+      });
+
+      const putResponse = await fetch("https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi", {
+        method: "POST",
+        body: putParams,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" }
+      });
+      
+      const putText = await putResponse.text();
+      const ridMatch = putText.match(/^ *RID *= *(\w+)/m);
+      
+      if (!ridMatch) throw new Error("Failed to get Request ID (RID) from NCBI.");
+      const rid = ridMatch[1];
+
+      let isReady = false;
+      while (!isReady) {
+        $("blastStatus").textContent = `Searching NCBI databases... (RID: ${rid}). This usually takes 1-3 minutes.`;
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        
+        const pollUrl = `https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi?CMD=Get&FORMAT_OBJECT=SearchInfo&RID=${rid}`;
+        const pollResponse = await fetch(pollUrl);
+        const pollText = await pollResponse.text();
+        const statusMatch = pollText.match(/^ *Status *= *(\w+)/m);
+        
+        if (statusMatch) {
+          const status = statusMatch[1];
+          if (status === "FAILED" || status === "UNKNOWN") throw new Error(`NCBI Search failed with status: ${status}`);
+          if (status === "READY") isReady = true;
+        }
+      }
+
+      $("blastStatus").textContent = "Search complete. Downloading results...";
+      const resultsUrl = `https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi?CMD=Get&FORMAT_TYPE=JSON2&RID=${rid}`;
+      const resultsResponse = await fetch(resultsUrl);
+      const jsonResult = await resultsResponse.json();
+
+      const searchObj = jsonResult.BlastOutput2[0].report.results.search;
+      const ncbiHits = searchObj.hits || [];
+      const queryLen = searchObj.query_len;
+
+      // Create a Set of your graph's base accessions to map NCBI hits
+      const graphBaseAccessions = new Map();
+      if (window.PLASMID_GRAPH.node_columns) {
+        const idIndex = window.PLASMID_GRAPH.node_columns.indexOf("id");
+        window.PLASMID_GRAPH.nodes.forEach(row => {
+          const fullId = row.id || "";
+          graphBaseAccessions.set(fullId.split('.')[0], fullId);
+        });
+      } else {
+        window.PLASMID_GRAPH.nodes.forEach(n => {
+          graphBaseAccessions.set(n.id.split('.')[0], n.id);
+        });
+      }
+
+      const minId = +$("blastMinId").value || 0;
+      const minCov = +$("blastMinCov").value || 0;
+      const maxHits = +$("blastMax").value || 50;
+
+      const formattedHits = [];
+      ncbiHits.forEach((hit) => {
+        const ncbiAccession = hit.description[0].accession;
+        const baseAccession = ncbiAccession.split('.')[0];
+        const graphId = graphBaseAccessions.get(baseAccession);
+        
+        const hsp = hit.hsps[0];
+        const identity = ((hsp.identity / hsp.align_len) * 100);
+        const queryCover = ((hsp.query_to - hsp.query_from + 1) / queryLen * 100);
+
+        if (identity >= minId && queryCover >= minCov) {
+          formattedHits.push({
+            plasmid: graphId || ncbiAccession,
+            in_graph: !!graphId,
+            identity: identity.toFixed(1),
+            query_cover: queryCover.toFixed(1),
+            evalue: hsp.evalue,
+            bitscore: hsp.bit_score,
+            subject_length: hit.description[0].scilen || 0
+          });
+        }
+      });
+
+      const finalHits = formattedHits.slice(0, maxHits);
+
+      const res = {
+        hits: finalHits,
+        query_length: queryLen,
+        min_identity: minId,
+        min_coverage: minCov,
+        before_filter: ncbiHits.length
+      };
+      
+      lastResult = res;
+      renderResults(res);
+
     } catch (e) {
-      $("blastStatus").className = "err"; $("blastStatus").textContent = "BLAST failed: " + e.message;
-    } finally { $("blastRun").disabled = !blastOnline; }
+      $("blastStatus").className = "err"; 
+      $("blastStatus").textContent = "BLAST failed: " + e.message;
+    } finally { 
+      $("blastRun").disabled = false; 
+    }
   }
 
   function openBlast() { $("blastModal").hidden = false; if (!lastResult) $("blastSeq").focus(); }
@@ -494,15 +587,11 @@
   $("blastExample").onclick = async () => {
     const r = await fetch("example_query.fasta"); if (r.ok) $("blastSeq").value = await r.text(); };
 
-  // is the BLAST server running? (it is when the page is served by server.py)
   (async () => {
-    try {
-      if (!location.protocol.startsWith("http")) throw 0;
-      const r = await fetch("api/health"); if (!r.ok) throw 0;
-      blastOnline = (await r.json()).blast === true;
-    } catch (e) { blastOnline = false; }
-    $("serverOff").hidden = blastOnline; $("blastRun").disabled = !blastOnline;
-    if (blastOnline) { try { const r = await fetch("example_query.fasta", { method: "HEAD" }); $("blastExample").hidden = !r.ok; } catch (e) {} }
+    try { 
+      const r = await fetch("example_query.fasta", { method: "HEAD" }); 
+      $("blastExample").hidden = !r.ok; 
+    } catch (e) {}
   })();
 
   function select(n, move) {
