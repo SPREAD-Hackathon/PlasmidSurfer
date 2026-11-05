@@ -1,4 +1,4 @@
-# plrisk — a plasmid epidemiological risk score
+# PlasmidSurfer — a plasmid epidemiological risk score
 
 A tool that takes an assembled plasmid and returns a 0–100 risk score for
 antimicrobial-resistance epidemiology, trained on PLSDB.
