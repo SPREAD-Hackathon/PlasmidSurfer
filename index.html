@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plasmid Relatedness Explorer</title>
+<style>
+  /* always light: white page, white graph area */
+  :root {
+    color-scheme: light;
+    --bg: #ffffff; --panel: #ffffff; --field: #f6f7f9; --text: #1d1d1b; --muted: #6b6b66;
+    --border: #e4e5e8; --accent: #0e9f84; --edge: #c4c6cc; --edge-hi: #0e9f84;
+    --chip: #e3f7f2;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         display: grid; grid-template-rows: auto 1fr; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center;
+           padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  #logo { height: 56px; margin: -8px 0; width: auto; display: block; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 650; }
+  header label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  input, select { font: inherit; color: var(--text); background: var(--field);
+                  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+  input[type=range] { padding: 0; width: 120px; }
+  #search { width: 220px; }
+  main { display: grid; grid-template-columns: 1fr 340px; min-height: 0; }
+  #graph { position: relative; min-height: 0; }
+  #legend { position: absolute; left: 12px; bottom: 12px; background: var(--panel);
+            border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+            max-height: 45%; overflow: auto; font-size: 12px; max-width: 260px; z-index: 5; }
+  #legend div { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  #legend span.sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  aside { border-left: 1px solid var(--border); background: var(--panel); overflow: auto; padding: 16px; }
+  aside h2 { font-size: 15px; margin: 0 0 4px; word-break: break-all; }
+  aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+             color: var(--muted); margin: 18px 0 6px; }
+  aside .hint { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 4px 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td:first-child { color: var(--muted); width: 40%; padding-right: 8px; }
+  .chip { display: inline-block; background: var(--chip); border-radius: 4px; padding: 0 6px; margin: 1px 2px 1px 0; font-size: 12px; }
+  ul.nb { list-style: none; padding: 0; margin: 0; }
+  ul.nb li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0;
+             border-bottom: 1px solid var(--border); cursor: pointer; }
+  ul.nb li:hover { color: var(--accent); }
+  ul.nb li .d { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .note { margin-top: 18px; font-size: 12px; color: var(--muted); }
+  .btn { font: inherit; font-size: 13px; border: 1px solid var(--accent); background: var(--accent); color: #fff;
+         border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+  .btn.ghost { background: transparent; color: var(--accent); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .modal { position: fixed; inset: 0; background: rgba(20, 24, 28, .28); z-index: 20;
+           display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; }
+  .dialog { background: var(--panel); border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.18);
+            width: 100%; max-width: 980px; max-height: calc(100vh - 96px); overflow: auto; padding: 20px 22px; }
+  .dialog h2 { margin: 0 0 4px; font-size: 17px; }
+  .dialog .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+  #blastSeq { width: 100%; height: 150px; margin-top: 12px; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+              resize: vertical; }
+  #blastStatus { margin-top: 10px; font-size: 13px; }
+  #blastStatus.err { color: #b3261e; }
+  .server-off { background: #fff6e5; border: 1px solid #f0d9a8; border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 13px; }
+  .server-off code { background: #fff; padding: 1px 4px; border-radius: 4px; }
+  table.hits { margin-top: 14px; font-size: 13px; }
+  table.hits th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 4px 8px 4px 0;
+                  border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.hits td { padding: 5px 8px 5px 0; width: auto; color: var(--text); }
+  table.hits td:first-child { width: auto; color: var(--muted); }
+  table.hits td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  table.hits tr.go { cursor: pointer; }
+  table.hits tr.go:hover td { color: var(--accent); }
+  .x { float: right; border: 0; background: none; font-size: 22px; line-height: 1; cursor: pointer; color: var(--muted); }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; grid-template-rows: 60vh auto; }
+    aside { border-left: 0; border-top: 1px solid var(--border); }
+    #search { width: 160px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <!-- put the logo file next to index.html, named logo.jpeg; it is hidden if the file is missing -->
+  <img id="logo" src="logo.jpeg" alt="ESGMAP" onerror="this.remove()">
+  <h1>Plasmid relatedness explorer</h1>
+  <label>Find <input id="search" list="plasmid-list" placeholder="plasmid name or accession"></label>
+  <datalist id="plasmid-list"></datalist>
+  <button id="blastBtn" class="btn" type="button">BLAST search</button>
+  <label>Colour by <select id="colorBy"></select></label>
+  <label id="geneWrap" hidden>gene <select id="gene"></select></label>
+  <label>Max DCJ distance <input id="dcj" type="range" min="0" max="10" step="1" value="4"> <b id="dcjVal">4</b></label>
+  <label><input id="labels" type="checkbox"> all labels</label>
+</header>
+<main>
+  <div id="graph"><div id="legend"></div></div>
+  <aside id="info">
+    <h2>No plasmid selected</h2>
+    <p class="hint">Click a plasmid in the graph, or type its name in Find. Links join plasmids PLING considers related; shorter DCJ distance means fewer structural rearrangements apart.</p>
+    <div id="summary"></div>
+  </aside>
+</main>
+
+<div id="blastModal" class="modal" hidden>
+  <div class="dialog" role="dialog" aria-labelledby="blastTitle">
+    <button class="x" id="blastClose" aria-label="Close">×</button>
+    <h2 id="blastTitle">BLAST a plasmid sequence</h2>
+    <p class="hint" style="margin:0">Runs <b>blastn</b> (megablast) against all plasmid sequences in the database and lists the best hits. Click a hit to find it in the graph, or show all hits at once.</p>
+    <div id="serverOff" class="server-off" hidden>
+      The BLAST search needs the small BLAST server. In a terminal, in the project folder, run
+      <code>python3 server.py --web web5000 --db blastdb/plasmids</code>
+      and open <code>http://localhost:8000</code>. Opening <code>index.html</code> directly from disk shows the graph only.
+    </div>
+    <textarea id="blastSeq" spellcheck="false" placeholder=">my_plasmid&#10;Paste a DNA sequence or FASTA record here, or choose a file below"></textarea>
+    <div class="row">
+      <input type="file" id="blastFile" accept=".fa,.fasta,.fna,.fas,.txt,.seq">
+      <button class="btn ghost" id="blastExample" type="button" hidden>Load example</button>
+      <label style="color:var(--muted);font-size:13px">Max hits
+        <select id="blastMax"><option>25</option><option selected>50</option><option>100</option><option>250</option></select></label>
+      <label style="color:var(--muted);font-size:13px">Min identity
+        <input id="blastMinId" type="number" min="0" max="100" step="0.5" value="0" style="width:64px"> %</label>
+      <label style="color:var(--muted);font-size:13px">Min query cover
+        <input id="blastMinCov" type="number" min="0" max="100" step="1" value="0" style="width:64px"> %</label>
+      <span style="flex:1"></span>
+      <button class="btn" id="blastRun" type="button">Run blastn</button>
+    </div>
+    <div id="blastStatus" class="hint"></div>
+    <div id="blastResults"></div>
+  </div>
+</div>
+
+<script src="lib/graphology.umd.min.js"></script>
+<script src="lib/graphology-library.min.js"></script>
+<script src="lib/sigma.min.js"></script>
+<script src="data.js"></script>
+<script>
+(function () {
+  const DATA = window.PLASMID_GRAPH;
+  const PALETTE = ["#2a6fdb", "#e0663a", "#2e9e6a", "#b347c6", "#d4a21b", "#1aa0b4",
+                   "#d1477a", "#7a8a2e", "#8a5a3c", "#5b5fd6", "#3fae3a", "#c0392b"];
+  const OTHER = "#9a9a94", ABSENT = "#cfcfc8";
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  // ---------- build graph ----------
+  const graph = new graphology.Graph({ type: "undirected", multi: false });
+  DATA.nodes.forEach((n, i) => {
+    const a = 2 * Math.PI * i / DATA.nodes.length;
+    graph.addNode(n.id, Object.assign({}, n, {
+      label: n.id, x: n.x ?? Math.cos(a), y: n.y ?? Math.sin(a), size: 6
+    }));
+  });
+  let maxD = 0;
+  DATA.edges.forEach(([s, t, d]) => {
+    if (s === t || graph.hasEdge(s, t)) return;
+    maxD = Math.max(maxD, d);
+    graph.addEdge(s, t, { dist: d, label: "DCJ " + d });
+  });
+  // node size grows gently with number of related plasmids
+  const big = graph.order > 1000;
+  graph.forEachNode(n => graph.setNodeAttribute(n, "size",
+    big ? 2 + 0.8 * Math.sqrt(graph.degree(n)) : 4 + 2.2 * Math.sqrt(graph.degree(n))));
+
+  // layout: only computed here if the data file has no positions (fine up to a few thousand nodes)
+  if (DATA.nodes.length && DATA.nodes[0].x === undefined) {
+    const FA2 = graphologyLibrary.layoutForceAtlas2;
+    const settings = Object.assign(FA2.inferSettings(graph), { gravity: 1.5, scalingRatio: 8 });
+    // lay out using only the edges inside the PLING threshold so communities separate
+    const g2 = graph.copy();
+    g2.filterEdges((e, a) => a.dist > 4).forEach(e => g2.dropEdge(e));
+    g2.forEachEdge((e, a) => g2.setEdgeAttribute(e, "weight", 1 / (1 + a.dist)));
+    FA2.assign(g2, { iterations: DATA.nodes.length > 2000 ? 300 : 600, settings,
+                     getEdgeWeight: "weight" });
+    g2.forEachNode((n, a) => graph.mergeNodeAttributes(n, { x: a.x, y: a.y }));
+  }
+
+  // ---------- colour options ----------
+  const metaCols = DATA.metadata_columns || [];
+  const colourable = ["community"].concat(metaCols.filter(c =>
+    !["accession", "length_bp", "amr_genes", "collection_date"].includes(c)));
+  const colorBy = document.getElementById("colorBy");
+  const pretty = c => c.replace(/_/g, " ");
+  colourable.forEach(c => colorBy.add(new Option(pretty(c), c)));
+  if (metaCols.includes("collection_date")) colorBy.add(new Option("collection year", "__year"));
+  const hasAmr = metaCols.includes("amr_genes");
+  const allGenes = new Map();
+  if (hasAmr) {
+    colorBy.add(new Option("carries any AMR gene", "__anyamr"));
+    colorBy.add(new Option("carries AMR gene…", "__gene"));
+    graph.forEachNode((n, a) => (a.amr_genes || "").split(";").filter(Boolean)
+      .forEach(g => allGenes.set(g, (allGenes.get(g) || 0) + 1)));
+    const geneSel = document.getElementById("gene");
+    [...allGenes.entries()].sort((a, b) => b[1] - a[1])
+      .forEach(([g, k]) => geneSel.add(new Option(`${g} (${k})`, g)));
+  }
+
+  const valueOf = (attrs, key) => {
+    if (key === "__year") return (attrs.collection_date || "").slice(0, 4) || "unknown";
+    if (key === "__anyamr") return (attrs.amr_genes || "").trim() ? "carries AMR genes" : "no AMR genes";
+    if (key === "__gene") {
+      const g = document.getElementById("gene").value;
+      return (attrs.amr_genes || "").split(";").includes(g) ? "carries " + g : "does not";
+    }
+    return attrs[key] || "unknown";
+  };
+
+  let colourMap = new Map();
+  function recolour() {
+    const key = colorBy.value;
+    document.getElementById("geneWrap").hidden = key !== "__gene";
+    const counts = new Map();
+    graph.forEachNode((n, a) => { const v = valueOf(a, key); counts.set(v, (counts.get(v) || 0) + 1); });
+    let order = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    if (key === "__year") order.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    colourMap = new Map();
+    if (key === "__anyamr") {
+      colourMap.set("carries AMR genes", "#d1477a");
+      colourMap.set("no AMR genes", ABSENT);
+    } else if (key === "__gene") {
+      colourMap.set("carries " + document.getElementById("gene").value, PALETTE[1]);
+      colourMap.set("does not", ABSENT);
+    } else {
+      // communities: cycle the palette so neighbouring groups still differ; other fields: top groups only
+      order.forEach(([v], i) => colourMap.set(v, v === "unknown" ? ABSENT :
+        (key === "community" ? PALETTE[i % PALETTE.length] : (PALETTE[i] || OTHER))));
+    }
+    graph.forEachNode((n, a) => graph.setNodeAttribute(n, "color", colourMap.get(valueOf(a, key)) || OTHER));
+    const legend = document.getElementById("legend");
+    const shown = order.slice(0, PALETTE.length);
+    legend.innerHTML = `<div style="color:var(--muted);margin-bottom:4px">${key === "__gene" ? "AMR gene" : key === "__anyamr" ? "AMR genes" : pretty(key.replace("__", ""))}</div>` +
+      shown.map(([v, k]) => `<div><span class="sw" style="background:${colourMap.get(v) || OTHER}"></span>${v} <span style="color:var(--muted)">(${k})</span></div>`).join("") +
+      (order.length > shown.length ? (key === "community"
+        ? `<div style="color:var(--muted)">+ ${order.length - shown.length} smaller communities</div>`
+        : `<div><span class="sw" style="background:${OTHER}"></span>other (${order.length - shown.length} groups)</div>`) : "");
+    renderer && renderer.refresh();
+  }
+
+  // ---------- renderer ----------
+  const dcj = document.getElementById("dcj");
+  dcj.max = Math.max(4, maxD);
+  let threshold = +dcj.value, selected = null, hovered = null, showAll = false;
+  let focus = new Set();
+  let hits = new Map();        // BLAST hits shown in the graph: plasmid id -> hit (with rank)
+
+  function setFocus() {
+    const n = hovered || selected;
+    focus = new Set();
+    if (n) {
+      focus.add(n);
+      graph.forEachNeighbor(n, (m) => { if (graph.getEdgeAttribute(graph.edge(n, m), "dist") <= threshold) focus.add(m); });
+    }
+  }
+
+  const renderer = new Sigma(graph, document.getElementById("graph"), {
+    renderEdgeLabels: true,
+    labelRenderedSizeThreshold: graph.order > 1000 ? 14 : 9,
+    labelColor: { color: css("--text") },
+    edgeLabelColor: { color: css("--muted") },
+    edgeLabelSize: 11,
+    labelSize: 12,
+    defaultEdgeColor: css("--edge"),
+    zIndex: true,
+    // big graphs: keep dots the same size on screen, so zooming in pulls close relatives apart
+    zoomToSizeRatioFunction: big ? (() => 1) : Math.sqrt,
+    nodeReducer: (n, a) => {
+      const r = Object.assign({}, a);
+      if (focus.size) {
+        if (focus.has(n)) { r.forceLabel = true; r.zIndex = 2; if (n === (hovered || selected)) r.highlighted = true; }
+        else { r.color = css("--border"); r.label = ""; r.zIndex = 0; }
+      } else if (hits.size) {
+        const h = hits.get(n);
+        if (h) { r.size = a.size + 3; r.zIndex = 2; r.highlighted = h.rank <= 3; if (h.rank <= 10 || showAll) r.forceLabel = true; }
+        else { r.color = css("--border"); r.label = ""; r.zIndex = 0; }
+      } else if (showAll) r.forceLabel = true;
+      return r;
+    },
+    edgeReducer: (e, a) => {
+      const r = Object.assign({}, a);
+      if (a.dist > threshold) { r.hidden = true; return r; }
+      r.size = Math.max(0.6, 3.2 - 0.5 * a.dist);
+      const [s, t] = graph.extremities(e);
+      const center = hovered || selected;
+      if (center) {
+        if (s === center || t === center) { r.color = css("--edge-hi"); r.forceLabel = true; r.zIndex = 2; }
+        else { r.hidden = true; }
+      } else {
+        r.label = "";
+        if (hits.size && !(hits.has(s) && hits.has(t))) r.hidden = true;  // with BLAST hits: only links among hits
+      }
+      return r;
+    }
+  });
+
+  recolour();
+  window.explorer = { graph, renderer };
+
+  // ---------- info panel ----------
+  const info = document.getElementById("info");
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const defaultInfo = info.innerHTML;
+
+  function summary() {
+    const comps = new Set(); graph.forEachNode((n, a) => comps.add(a.community));
+    let shown = 0; graph.forEachEdge((e, a) => { if (a.dist <= threshold) shown++; });
+    return `<h3>Dataset</h3><table>
+      <tr><td>Plasmids</td><td>${graph.order}</td></tr>
+      <tr><td>PLING communities</td><td>${comps.size}</td></tr>
+      <tr><td>Links shown</td><td>${shown} of ${graph.size} (DCJ ≤ ${threshold})</td></tr></table>`;
+  }
+
+  function showInfo(n) {
+    if (!n) {
+      if (hits.size) { showHitsPanel(); return; }
+      info.innerHTML = defaultInfo; document.getElementById("summary").innerHTML = summary(); return;
+    }
+    const a = graph.getNodeAttributes(n);
+    const rows = [["PLING type", a.pling_type + (a.hub ? ' <span class="chip">hub plasmid</span>' : "")]];
+    if (hits.has(n)) { const h = hits.get(n);
+      rows.unshift(["BLAST hit", `<span class="chip">#${h.rank}</span> ${h.identity}% identity, ${h.query_cover}% query cover`]); }
+    metaCols.forEach(c => {
+      let v = a[c] ?? "";
+      if (c === "amr_genes") v = v ? v.split(";").map(g => `<span class="chip">${esc(g)}</span>`).join("") : '<span class="hint">none detected</span>';
+      else if (c === "length_bp" && v) v = (+v).toLocaleString() + " bp";
+      else v = esc(v || "unknown");
+      rows.push([pretty(c), v]);
+    });
+    const nbs = graph.neighbors(n).map(m => ({ m, d: graph.getEdgeAttribute(graph.edge(n, m), "dist") }))
+      .sort((x, y) => x.d - y.d);
+    const within = nbs.filter(x => x.d <= threshold);
+    info.innerHTML = `<h2>${esc(n)}</h2>
+      <table>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</table>
+      <h3>Related plasmids, DCJ ≤ ${threshold} (${within.length})</h3>
+      ${within.length ? `<ul class="nb">${within.map(x => {
+        const b = graph.getNodeAttributes(x.m);
+        return `<li data-id="${esc(x.m)}"><span>${esc(x.m)}<br><span class="hint" style="font-size:12px">${esc(b.host || "")}${b.country ? " · " + esc(b.country) : ""}${b.collection_date ? " · " + esc(b.collection_date.slice(0, 4)) : ""}</span></span><span class="d">DCJ ${x.d}</span></li>`;
+      }).join("")}</ul>` : '<p class="hint">None within this distance. Raise the Max DCJ distance slider to see more distant relatives.</p>'}
+      ${nbs.length > within.length ? `<p class="hint">${nbs.length - within.length} more at larger distances are hidden.</p>` : ""}`;
+    if (hits.size) info.insertAdjacentHTML("beforeend", '<p><button class="btn ghost" id="backHits" type="button">← Back to BLAST hits</button></p>');
+    const back = document.getElementById("backHits"); if (back) back.onclick = () => select(null);
+    info.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id, true));
+  }
+
+  // ---------- BLAST ----------
+  const $ = id => document.getElementById(id);
+  const fmtE = e => e === 0 ? "0" : (+e).toExponential(1);
+  let lastResult = null, blastOnline = false;
+
+  function showHitsPanel() {
+    const list = [...hits.values()].sort((x, y) => x.rank - y.rank);
+    info.innerHTML = `<h2>BLAST hits in the graph (${list.length})</h2>
+      <p class="hint">Hits are highlighted; everything else is greyed out. Click a hit to see its details and PLING relatives.</p>
+      <p><button class="btn ghost" id="clearHits" type="button">Clear BLAST hits</button>
+         <button class="btn ghost" id="reopenBlast" type="button">Results table</button></p>
+      <ul class="nb">${list.map(h => `<li data-id="${esc(h.plasmid)}"><span><span class="chip">#${h.rank}</span> ${esc(h.plasmid)}<br>
+        <span class="hint" style="font-size:12px">${esc(graph.getNodeAttribute(h.plasmid, "host") || "")} · ${esc(graph.getNodeAttribute(h.plasmid, "community") || "")}</span></span>
+        <span class="d">${h.identity}% · ${h.query_cover}%</span></li>`).join("")}</ul>`;
+    $("clearHits").onclick = () => { hits = new Map(); select(null); };
+    $("reopenBlast").onclick = openBlast;
+    info.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id, true));
+  }
+
+  function showHitsInGraph(focusId) {
+    hits = new Map();
+    lastResult.hits.forEach((h, i) => { if (graph.hasNode(h.plasmid)) hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h)); });
+    $("blastModal").hidden = true;
+    if (focusId) { select(focusId, true); return; }
+    select(null);
+    // zoom to fit all hits
+    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    hits.forEach((h, id) => { const d = renderer.getNodeDisplayData(id);
+      x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x); y0 = Math.min(y0, d.y); y1 = Math.max(y1, d.y); });
+    if (hits.size) renderer.getCamera().animate({ x: (x0 + x1) / 2, y: (y0 + y1) / 2,
+      ratio: Math.min(1, Math.max(0.02, Math.max(x1 - x0, y1 - y0) * 1.4)) }, { duration: 600 });
+  }
+
+  function renderResults(res) {
+    const inGraph = res.hits.filter(h => graph.hasNode(h.plasmid)).length;
+    $("blastStatus").className = "hint";
+    const filt = (res.min_identity || res.min_coverage)
+      ? ` · filters: identity ≥ ${res.min_identity}%, query cover ≥ ${res.min_coverage}% (${res.before_filter} hits before filtering)` : "";
+    $("blastStatus").textContent = (res.hits.length
+      ? `Query ${res.query_length.toLocaleString()} bp · ${res.hits.length} hits (${inGraph} in the graph), best first`
+      : `Query ${res.query_length.toLocaleString()} bp · no hits pass (E-value ≤ 1e-10)`) + filt + ".";
+    if (!res.hits.length) { $("blastResults").innerHTML = ""; return; }
+    const g = id => graph.hasNode(id) ? graph.getNodeAttributes(id) : null;
+    $("blastResults").innerHTML = `<div class="row"><button class="btn" id="showHits" type="button">Show all ${inGraph} hits in the graph</button></div>
+      <table class="hits"><thead><tr><th>#</th><th>Plasmid</th><th>Identity</th><th>Query cover</th><th>E-value</th><th>Bit score</th>
+      <th>Length</th><th>Host</th><th>Country</th><th>Year</th><th>PLING community</th></tr></thead><tbody>
+      ${res.hits.map((h, i) => { const a = g(h.plasmid);
+        return `<tr class="${a ? "go" : ""}" data-id="${esc(h.plasmid)}" title="${a ? "Show in graph" : "Not in the graph"}">
+          <td>${i + 1}</td><td>${esc(h.plasmid)}</td><td class="num">${h.identity}%</td><td class="num">${h.query_cover}%</td>
+          <td class="num">${fmtE(h.evalue)}</td><td class="num">${h.bitscore.toLocaleString()}</td>
+          <td class="num">${(h.subject_length || 0).toLocaleString()}</td>
+          <td>${esc(a ? a.host || "" : "")}</td><td>${esc(a ? a.country || "" : "")}</td>
+          <td>${esc(a ? (a.collection_date || "").slice(0, 4) : "")}</td>
+          <td>${a ? esc(a.community) : '<span class="hint">not in graph</span>'}</td></tr>`; }).join("")}
+      </tbody></table>`;
+    $("showHits").onclick = () => showHitsInGraph();
+    $("blastResults").querySelectorAll("tr.go").forEach(tr => tr.onclick = () => showHitsInGraph(tr.dataset.id));
+  }
+
+  async function runBlast() {
+    const seq = $("blastSeq").value;
+    if (!seq.trim()) { $("blastStatus").className = "err"; $("blastStatus").textContent = "Paste a sequence or choose a file first."; return; }
+    $("blastRun").disabled = true; $("blastStatus").className = "hint";
+    $("blastStatus").textContent = "Running blastn…"; $("blastResults").innerHTML = "";
+    try {
+      const r = await fetch("api/blast", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sequence: seq, max_hits: +$("blastMax").value,
+          min_identity: +$("blastMinId").value || 0, min_coverage: +$("blastMinCov").value || 0 }) });
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.error || r.statusText);
+      lastResult = res; renderResults(res);
+    } catch (e) {
+      $("blastStatus").className = "err"; $("blastStatus").textContent = "BLAST failed: " + e.message;
+    } finally { $("blastRun").disabled = !blastOnline; }
+  }
+
+  function openBlast() { $("blastModal").hidden = false; if (!lastResult) $("blastSeq").focus(); }
+  $("blastBtn").onclick = openBlast;
+  $("blastClose").onclick = () => { $("blastModal").hidden = true; };
+  $("blastModal").onclick = e => { if (e.target.id === "blastModal") $("blastModal").hidden = true; };
+  document.addEventListener("keydown", e => { if (e.key === "Escape") $("blastModal").hidden = true; });
+  $("blastRun").onclick = runBlast;
+  $("blastFile").onchange = e => { const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader(); rd.onload = () => { $("blastSeq").value = rd.result; }; rd.readAsText(f); };
+  $("blastExample").onclick = async () => {
+    const r = await fetch("example_query.fasta"); if (r.ok) $("blastSeq").value = await r.text(); };
+
+  // is the BLAST server running? (it is when the page is served by server.py)
+  (async () => {
+    try {
+      if (!location.protocol.startsWith("http")) throw 0;
+      const r = await fetch("api/health"); if (!r.ok) throw 0;
+      blastOnline = (await r.json()).blast === true;
+    } catch (e) { blastOnline = false; }
+    $("serverOff").hidden = blastOnline; $("blastRun").disabled = !blastOnline;
+    if (blastOnline) { try { const r = await fetch("example_query.fasta", { method: "HEAD" }); $("blastExample").hidden = !r.ok; } catch (e) {} }
+  })();
+
+  function select(n, move) {
+    selected = n; setFocus(); showInfo(n); renderer.refresh();
+    if (n && move) {
+      // centre on the plasmid and zoom so its related plasmids fit on screen
+      const p = renderer.getNodeDisplayData(n);
+      let span = 0;
+      focus.forEach(m => { const q = renderer.getNodeDisplayData(m);
+        span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y)); });
+      const ratio = Math.min(1, Math.max(0.01, span * 3));
+      renderer.getCamera().animate({ x: p.x, y: p.y, ratio }, { duration: 500 });
+    }
+  }
+
+  renderer.on("clickNode", ({ node }) => select(node, false));
+  renderer.on("clickStage", () => select(null));
+  renderer.on("enterNode", ({ node }) => { hovered = node; setFocus(); renderer.refresh(); document.body.style.cursor = "pointer"; });
+  renderer.on("leaveNode", () => { hovered = null; setFocus(); renderer.refresh(); document.body.style.cursor = ""; });
+
+  // ---------- controls ----------
+  colorBy.onchange = recolour;
+  document.getElementById("gene").onchange = recolour;
+  dcj.oninput = () => {
+    threshold = +dcj.value; document.getElementById("dcjVal").textContent = threshold;
+    setFocus(); showInfo(selected); renderer.refresh();
+  };
+  document.getElementById("labels").onchange = e => { showAll = e.target.checked; renderer.refresh(); };
+
+  const dl = document.getElementById("plasmid-list"), byAcc = new Map();
+  graph.forEachNode((n, a) => {
+    dl.appendChild(new Option(a.accession ? `${n} (${a.accession})` : n, n));
+    if (a.accession) byAcc.set(a.accession.toLowerCase(), n);
+  });
+  document.getElementById("search").onchange = e => {
+    const q = e.target.value.trim(), ql = q.toLowerCase();
+    const hit = graph.hasNode(q) ? q : byAcc.get(ql) || graph.findNode(n => n.toLowerCase().includes(ql));
+    if (hit) select(hit, true);
+  };
+
+  document.getElementById("summary").innerHTML = summary();
+})();
+</script>
+</body>
+</html>
