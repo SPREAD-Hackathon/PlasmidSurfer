@@ -31,7 +31,7 @@
   #graph { position: relative; min-height: 0; }
   #legend { position: absolute; left: 12px; bottom: 12px; background: var(--panel);
             border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
-            max-height: 45%; overflow: auto; font-size: 12px; max-width: 260px; z-index: 5; }
+            max-height: 45%; overflow: auto; font-size: 12px; max-width: 360px; z-index: 5; }
   #legend div { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   #legend span.sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
   aside { border-left: 1px solid var(--border); background: var(--panel); overflow: auto; padding: 16px; }
@@ -63,8 +63,6 @@
               resize: vertical; }
   #blastStatus { margin-top: 10px; font-size: 13px; }
   #blastStatus.err { color: #b3261e; }
-  .server-off { background: #fff6e5; border: 1px solid #f0d9a8; border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 13px; }
-  .server-off code { background: #fff; padding: 1px 4px; border-radius: 4px; }
   table.hits { margin-top: 14px; font-size: 13px; }
   table.hits th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 4px 8px 4px 0;
                   border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -91,7 +89,9 @@
   <button id="blastBtn" class="btn" type="button">BLAST search</button>
   <label>Colour by <select id="colorBy"></select></label>
   <label id="geneWrap" hidden>gene <select id="gene"></select></label>
+  <label>Dot size <select id="sizeBy"><option value="length">plasmid length</option><option value="relatives">number of relatives</option><option value="same">all the same</option></select></label>
   <label>Max DCJ distance <input id="dcj" type="range" min="0" max="10" step="1" value="4"> <b id="dcjVal">4</b></label>
+  <label id="phriWrap" hidden title="Public health risk index: hide plasmids scoring below this">Min PHRI <input id="minPhri" type="range" min="0" max="9.5" step="0.5" value="0"> <b id="minPhriVal">0</b></label><!-- PHRI -->
   <label><input id="labels" type="checkbox"> all labels</label>
 </header>
 <main>
@@ -107,12 +107,7 @@
   <div class="dialog" role="dialog" aria-labelledby="blastTitle">
     <button class="x" id="blastClose" aria-label="Close">×</button>
     <h2 id="blastTitle">BLAST a plasmid sequence</h2>
-    <p class="hint" style="margin:0">Runs <b>blastn</b> (megablast) against all plasmid sequences in the database and lists the best hits. Click a hit to find it in the graph, or show all hits at once.</p>
-    <div id="serverOff" class="server-off" hidden>
-      The BLAST search needs the small BLAST server. In a terminal, in the project folder, run
-      <code>python3 server.py --web web5000 --db blastdb/plasmids</code>
-      and open <code>http://localhost:8000</code>. Opening <code>index.html</code> directly from disk shows the graph only.
-    </div>
+    <p class="hint" style="margin:0">Runs <b>blastn</b> (megablast) against NCBI databases and lists the best hits. Click a hit to find it in the graph, or show all hits at once.</p>
     <textarea id="blastSeq" spellcheck="false" placeholder=">my_plasmid&#10;Paste a DNA sequence or FASTA record here, or choose a file below"></textarea>
     <div class="row">
       <input type="file" id="blastFile" accept=".fa,.fasta,.fna,.fas,.txt,.seq">
@@ -135,9 +130,23 @@
 <script src="lib/graphology-library.min.js"></script>
 <script src="lib/sigma.min.js"></script>
 <script src="data.js"></script>
+<script src="phri.js"></script><!-- PHRI add-on; the page works the same without it -->
 <script>
 (function () {
   const DATA = window.PLASMID_GRAPH;
+  if (DATA.node_columns) {   // compact table format from build_graph.py
+    const C = DATA.node_columns;
+    DATA.nodes = DATA.node_rows.map(r => { const o = {}; C.forEach((c, i) => { if (r[i] !== "" && r[i] !== null) o[c] = r[i]; }); return o; });
+    delete DATA.node_rows;
+  }
+  if (DATA.phri_rows) {      // PHRI: per-plasmid scores from data_phri.js, same order as the nodes
+    const P = DATA.phri_columns;
+    DATA.phri_rows.forEach((r, i) => P.forEach((c, j) => { if (r[j] !== "") DATA.nodes[i][c] = r[j]; }));
+    delete DATA.phri_rows;
+  }
+  const hasPhri = window.PHRI ? PHRI.init(DATA) : false;   // PHRI
+  const PHRI_GROUP = (DATA.phri && DATA.phri.community_field) || "community";   // PHRI: grouping used for the spread axis
+  DATA.edges = DATA.edges || [];
   const PALETTE = ["#2a6fdb", "#e0663a", "#2e9e6a", "#b347c6", "#d4a21b", "#1aa0b4",
                    "#d1477a", "#7a8a2e", "#8a5a3c", "#5b5fd6", "#3fae3a", "#c0392b"];
   const OTHER = "#9a9a94", ABSENT = "#cfcfc8";
@@ -153,14 +162,30 @@
   });
   let maxD = 0;
   DATA.edges.forEach(([s, t, d]) => {
+    if (typeof s === "number") { s = DATA.nodes[s].id; t = DATA.nodes[t].id; }  // compact format: indices
     if (s === t || graph.hasEdge(s, t)) return;
     maxD = Math.max(maxD, d);
     graph.addEdge(s, t, { dist: d, label: "DCJ " + d });
   });
-  // node size grows gently with number of related plasmids
   const big = graph.order > 1000;
-  graph.forEachNode(n => graph.setNodeAttribute(n, "size",
-    big ? 2 + 0.8 * Math.sqrt(graph.degree(n)) : 4 + 2.2 * Math.sqrt(graph.degree(n))));
+  const TOPK = DATA.top_k || 0;      // >0: data file holds only each plasmid's TOPK closest links
+  const hasLength = (DATA.metadata_columns || []).includes("length_bp");
+  // dot size: plasmid length on a log scale (1 kb small ... 1 Mb large), or number of relatives
+  function resize() {
+    const mode = document.getElementById("sizeBy").value;
+    const lo = big ? 1 : 3, span = big ? 1.3 : 5;
+    graph.forEachNode((n, a) => {
+      let v;
+      if (mode === "length" && hasLength && +a.length_bp > 0)
+        v = lo + span * Math.max(0, Math.min(3.3, Math.log10(+a.length_bp) - 3));   // 1 kb -> lo, 10 kb, 100 kb, 1 Mb -> lo + 3*span
+      else if (mode === "relatives")
+        v = (big ? 2 : 4) + (big ? 0.8 : 2.2) * Math.sqrt(a.relatives ?? graph.degree(n));
+      else v = big ? 3 : 6;
+      graph.setNodeAttribute(n, "size", v);
+    });
+  }
+  if (!hasLength) { document.getElementById("sizeBy").value = "relatives"; document.getElementById("sizeBy").options[0].disabled = true; }
+  resize();
 
   // layout: only computed here if the data file has no positions (fine up to a few thousand nodes)
   if (DATA.nodes.length && DATA.nodes[0].x === undefined) {
@@ -177,12 +202,23 @@
 
   // ---------- colour options ----------
   const metaCols = DATA.metadata_columns || [];
+  // colour options: every metadata column except ids, numbers, gene lists, dates and free text
+  // (a column with more than 3,000 distinct values, or one per plasmid, is not offered)
+  const distinct = c => { const s = new Set(); graph.forEachNode((n, a) => s.add(a[c])); return s.size; };
   const colourable = ["community"].concat(metaCols.filter(c =>
-    !["accession", "length_bp", "amr_genes", "collection_date"].includes(c)));
+    !["accession", "length_bp", "amr_genes", "collection_date", "submission_date", "description"].includes(c) &&
+    distinct(c) <= Math.min(3000, 0.5 * graph.order + 20)));
   const colorBy = document.getElementById("colorBy");
   const pretty = c => c.replace(/_/g, " ");
   colourable.forEach(c => colorBy.add(new Option(pretty(c), c)));
-  if (metaCols.includes("collection_date")) colorBy.add(new Option("collection year", "__year"));
+  colorBy.add(new Option("PLING subcommunity", "pling_type"));
+  // when one PLING community holds most plasmids (real PLSDB), subcommunities are the useful colouring
+  const commCounts = new Map(); graph.forEachNode((n, a) => commCounts.set(a.community, (commCounts.get(a.community) || 0) + 1));
+  const giant = Math.max(...commCounts.values()) > 0.5 * graph.order;
+  if (giant) colorBy.value = "pling_type";
+  const dateCol = metaCols.includes("collection_date") ? "collection_date" : metaCols.includes("submission_date") ? "submission_date" : null;
+  if (dateCol) colorBy.add(new Option(dateCol === "collection_date" ? "collection year" : "submission year", "__year"));
+  if (hasPhri) colorBy.add(new Option("public health risk (PHRI)", "__phri"));   // PHRI
   const hasAmr = metaCols.includes("amr_genes");
   const allGenes = new Map();
   if (hasAmr) {
@@ -196,8 +232,9 @@
   }
 
   const valueOf = (attrs, key) => {
-    if (key === "__year") return (attrs.collection_date || "").slice(0, 4) || "unknown";
+    if (key === "__year") return (attrs[dateCol] || "").slice(0, 4) || "unknown";
     if (key === "__anyamr") return (attrs.amr_genes || "").trim() ? "carries AMR genes" : "no AMR genes";
+    if (key === "__phri") return PHRI.bandLabel(attrs);   // PHRI
     if (key === "__gene") {
       const g = document.getElementById("gene").value;
       return (attrs.amr_genes || "").split(";").includes(g) ? "carries " + g : "does not";
@@ -213,25 +250,33 @@
     graph.forEachNode((n, a) => { const v = valueOf(a, key); counts.set(v, (counts.get(v) || 0) + 1); });
     let order = [...counts.entries()].sort((a, b) => b[1] - a[1]);
     if (key === "__year") order.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+    if (key === "__phri") { const ord = PHRI.bandOrder(); order.sort((a, b) => ord.indexOf(a[0]) - ord.indexOf(b[0])); }   // PHRI: worst first
     colourMap = new Map();
     if (key === "__anyamr") {
       colourMap.set("carries AMR genes", "#d1477a");
       colourMap.set("no AMR genes", ABSENT);
+    } else if (key === "__phri") {   // PHRI
+      colourMap = PHRI.bandColours();
+      colourMap.set("unknown", ABSENT);
     } else if (key === "__gene") {
       colourMap.set("carries " + document.getElementById("gene").value, PALETTE[1]);
       colourMap.set("does not", ABSENT);
     } else {
       // communities: cycle the palette so neighbouring groups still differ; other fields: top groups only
       order.forEach(([v], i) => colourMap.set(v, v === "unknown" ? ABSENT :
-        (key === "community" ? PALETTE[i % PALETTE.length] : (PALETTE[i] || OTHER))));
+        (key === "community" || key === "pling_type" ? PALETTE[i % PALETTE.length] : (PALETTE[i] || OTHER))));
     }
     graph.forEachNode((n, a) => graph.setNodeAttribute(n, "color", colourMap.get(valueOf(a, key)) || OTHER));
     const legend = document.getElementById("legend");
     const shown = order.slice(0, PALETTE.length);
-    legend.innerHTML = `<div style="color:var(--muted);margin-bottom:4px">${key === "__gene" ? "AMR gene" : key === "__anyamr" ? "AMR genes" : pretty(key.replace("__", ""))}</div>` +
+    const title = key === "pling_type" ? "PLING subcommunity" : key === "__gene" ? "AMR gene" : key === "__anyamr" ? "AMR genes"
+      : key === "__phri" ? "public health risk (PHRI)"
+      : key === "__year" ? (dateCol === "collection_date" ? "collection year" : "submission year") : pretty(key);
+    const sizeNote = hasLength && document.getElementById("sizeBy").value === "length" ? " · dot size = plasmid length" : "";
+    legend.innerHTML = `<div style="color:var(--muted);margin-bottom:4px">${title}${sizeNote}</div>` +
       shown.map(([v, k]) => `<div><span class="sw" style="background:${colourMap.get(v) || OTHER}"></span>${v} <span style="color:var(--muted)">(${k})</span></div>`).join("") +
-      (order.length > shown.length ? (key === "community"
-        ? `<div style="color:var(--muted)">+ ${order.length - shown.length} smaller communities</div>`
+      (order.length > shown.length ? (key === "community" || key === "pling_type"
+        ? `<div style="color:var(--muted)">+ ${order.length - shown.length} smaller ${key === "community" ? "communities" : "subcommunities"}</div>`
         : `<div><span class="sw" style="background:${OTHER}"></span>other (${order.length - shown.length} groups)</div>`) : "");
     renderer && renderer.refresh();
   }
@@ -240,6 +285,8 @@
   const dcj = document.getElementById("dcj");
   dcj.max = Math.max(4, maxD);
   let threshold = +dcj.value, selected = null, hovered = null, showAll = false;
+  let minPhri = 0;   // PHRI: hide plasmids scoring below this (0 = off)
+  const phriOk = n => !minPhri || PHRI.passesFilter(graph.getNodeAttributes(n), minPhri);
   let focus = new Set();
   let hits = new Map();        // BLAST hits shown in the graph: plasmid id -> hit (with rank)
 
@@ -265,6 +312,7 @@
     zoomToSizeRatioFunction: big ? (() => 1) : Math.sqrt,
     nodeReducer: (n, a) => {
       const r = Object.assign({}, a);
+      if (minPhri && n !== selected && !PHRI.passesFilter(a, minPhri)) { r.hidden = true; return r; }   // PHRI
       if (focus.size) {
         if (focus.has(n)) { r.forceLabel = true; r.zIndex = 2; if (n === (hovered || selected)) r.highlighted = true; }
         else { r.color = css("--border"); r.label = ""; r.zIndex = 0; }
@@ -278,6 +326,7 @@
     edgeReducer: (e, a) => {
       const r = Object.assign({}, a);
       if (a.dist > threshold) { r.hidden = true; return r; }
+      if (minPhri && !graph.extremities(e).every(phriOk)) { r.hidden = true; return r; }   // PHRI
       r.size = Math.max(0.6, 3.2 - 0.5 * a.dist);
       const [s, t] = graph.extremities(e);
       const center = hovered || selected;
@@ -286,6 +335,8 @@
         else { r.hidden = true; }
       } else {
         r.label = "";
+        // big real-data views: in the overview, only draw links inside a PLING subcommunity
+        if (giant && !hits.size && graph.getNodeAttribute(s, "pling_type") !== graph.getNodeAttribute(t, "pling_type")) r.hidden = true;
         if (hits.size && !(hits.has(s) && hits.has(t))) r.hidden = true;  // with BLAST hits: only links among hits
       }
       return r;
@@ -306,7 +357,9 @@
     return `<h3>Dataset</h3><table>
       <tr><td>Plasmids</td><td>${graph.order}</td></tr>
       <tr><td>PLING communities</td><td>${comps.size}</td></tr>
-      <tr><td>Links shown</td><td>${shown} of ${graph.size} (DCJ ≤ ${threshold})</td></tr></table>`;
+      <tr><td>Links shown</td><td>${shown.toLocaleString()} of ${graph.size.toLocaleString()} (DCJ ≤ ${threshold})</td></tr>
+      ${hasPhri ? PHRI.summaryRows() : ""}</table>
+      ${TOPK ? `<p class="hint">This view keeps each plasmid's ${TOPK} closest PLING links so it stays fast; the full count is shown per plasmid.</p>` : ""}`;
   }
 
   function showInfo(n) {
@@ -316,6 +369,7 @@
     }
     const a = graph.getNodeAttributes(n);
     const rows = [["PLING type", a.pling_type + (a.hub ? ' <span class="chip">hub plasmid</span>' : "")]];
+    if (a.relatives !== undefined) rows.push(["PLING relatives", `${a.relatives.toLocaleString()} with DCJ ≤ 4`]);
     if (hits.has(n)) { const h = hits.get(n);
       rows.unshift(["BLAST hit", `<span class="chip">#${h.rank}</span> ${h.identity}% identity, ${h.query_cover}% query cover`]); }
     metaCols.forEach(c => {
@@ -329,13 +383,17 @@
       .sort((x, y) => x.d - y.d);
     const within = nbs.filter(x => x.d <= threshold);
     info.innerHTML = `<h2>${esc(n)}</h2>
+      ${hasPhri ? PHRI.panelHTML(a) : ""}
+      ${hasPhri ? "<h3>Plasmid</h3>" : ""}
       <table>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</table>
+      ${hasPhri ? PHRI.communityHTML(a[PHRI_GROUP]) : ""}
       <h3>Related plasmids, DCJ ≤ ${threshold} (${within.length})</h3>
       ${within.length ? `<ul class="nb">${within.map(x => {
         const b = graph.getNodeAttributes(x.m);
-        return `<li data-id="${esc(x.m)}"><span>${esc(x.m)}<br><span class="hint" style="font-size:12px">${esc(b.host || "")}${b.country ? " · " + esc(b.country) : ""}${b.collection_date ? " · " + esc(b.collection_date.slice(0, 4)) : ""}</span></span><span class="d">DCJ ${x.d}</span></li>`;
+        return `<li data-id="${esc(x.m)}"><span>${hasPhri ? PHRI.chip(b) + " " : ""}${esc(x.m)}<br><span class="hint" style="font-size:12px">${esc(b.host || "")}${b.country ? " · " + esc(b.country) : ""}${dateCol && b[dateCol] ? " · " + esc(String(b[dateCol]).slice(0, 4)) : ""}</span></span><span class="d">DCJ ${x.d}</span></li>`;
       }).join("")}</ul>` : '<p class="hint">None within this distance. Raise the Max DCJ distance slider to see more distant relatives.</p>'}
-      ${nbs.length > within.length ? `<p class="hint">${nbs.length - within.length} more at larger distances are hidden.</p>` : ""}`;
+      ${nbs.length > within.length ? `<p class="hint">${nbs.length - within.length} more at larger distances are hidden.</p>` : ""}
+      ${TOPK && a.relatives > nbs.length ? `<p class="hint">To keep this view fast, each plasmid shows only its ${TOPK} closest relatives plus any that list it among theirs (${nbs.length} of ${a.relatives.toLocaleString()} here).</p>` : ""}`;
     if (hits.size) info.insertAdjacentHTML("beforeend", '<p><button class="btn ghost" id="backHits" type="button">← Back to BLAST hits</button></p>');
     const back = document.getElementById("backHits"); if (back) back.onclick = () => select(null);
     info.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id, true));
@@ -344,7 +402,7 @@
   // ---------- BLAST ----------
   const $ = id => document.getElementById(id);
   const fmtE = e => e === 0 ? "0" : (+e).toExponential(1);
-  let lastResult = null, blastOnline = false;
+  let lastResult = null;
 
   function showHitsPanel() {
     const list = [...hits.values()].sort((x, y) => x.rank - y.rank);
@@ -353,7 +411,7 @@
       <p><button class="btn ghost" id="clearHits" type="button">Clear BLAST hits</button>
          <button class="btn ghost" id="reopenBlast" type="button">Results table</button></p>
       <ul class="nb">${list.map(h => `<li data-id="${esc(h.plasmid)}"><span><span class="chip">#${h.rank}</span> ${esc(h.plasmid)}<br>
-        <span class="hint" style="font-size:12px">${esc(graph.getNodeAttribute(h.plasmid, "host") || "")} · ${esc(graph.getNodeAttribute(h.plasmid, "community") || "")}</span></span>
+        <span class="hint" style="font-size:12px">${esc(graph.getNodeAttribute(h.plasmid, "host") || "")} · ${esc(graph.getNodeAttribute(h.plasmid, giant ? "pling_type" : "community") || "")}</span></span>
         <span class="d">${h.identity}% · ${h.query_cover}%</span></li>`).join("")}</ul>`;
     $("clearHits").onclick = () => { hits = new Map(); select(null); };
     $("reopenBlast").onclick = openBlast;
@@ -362,7 +420,7 @@
 
   function showHitsInGraph(focusId) {
     hits = new Map();
-    lastResult.hits.forEach((h, i) => { if (graph.hasNode(h.plasmid)) hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h)); });
+    lastResult.hits.forEach((h, i) => { if (h.in_graph) hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h)); });
     $("blastModal").hidden = true;
     if (focusId) { select(focusId, true); return; }
     select(null);
@@ -375,7 +433,7 @@
   }
 
   function renderResults(res) {
-    const inGraph = res.hits.filter(h => graph.hasNode(h.plasmid)).length;
+    const inGraph = res.hits.filter(h => h.in_graph).length;
     $("blastStatus").className = "hint";
     const filt = (res.min_identity || res.min_coverage)
       ? ` · filters: identity ≥ ${res.min_identity}%, query cover ≥ ${res.min_coverage}% (${res.before_filter} hits before filtering)` : "";
@@ -386,15 +444,15 @@
     const g = id => graph.hasNode(id) ? graph.getNodeAttributes(id) : null;
     $("blastResults").innerHTML = `<div class="row"><button class="btn" id="showHits" type="button">Show all ${inGraph} hits in the graph</button></div>
       <table class="hits"><thead><tr><th>#</th><th>Plasmid</th><th>Identity</th><th>Query cover</th><th>E-value</th><th>Bit score</th>
-      <th>Length</th><th>Host</th><th>Country</th><th>Year</th><th>PLING community</th></tr></thead><tbody>
+      <th>Length</th><th>Host</th><th>Country</th><th>Year</th><th>${giant ? "PLING subcommunity" : "PLING community"}</th></tr></thead><tbody>
       ${res.hits.map((h, i) => { const a = g(h.plasmid);
         return `<tr class="${a ? "go" : ""}" data-id="${esc(h.plasmid)}" title="${a ? "Show in graph" : "Not in the graph"}">
           <td>${i + 1}</td><td>${esc(h.plasmid)}</td><td class="num">${h.identity}%</td><td class="num">${h.query_cover}%</td>
           <td class="num">${fmtE(h.evalue)}</td><td class="num">${h.bitscore.toLocaleString()}</td>
           <td class="num">${(h.subject_length || 0).toLocaleString()}</td>
           <td>${esc(a ? a.host || "" : "")}</td><td>${esc(a ? a.country || "" : "")}</td>
-          <td>${esc(a ? (a.collection_date || "").slice(0, 4) : "")}</td>
-          <td>${a ? esc(a.community) : '<span class="hint">not in graph</span>'}</td></tr>`; }).join("")}
+          <td>${esc(a ? (a[dateCol] || "").slice(0, 4) : "")}</td>
+          <td>${a ? esc(giant ? a.pling_type : a.community) : '<span class="hint">not in graph</span>'}</td></tr>`; }).join("")}
       </tbody></table>`;
     $("showHits").onclick = () => showHitsInGraph();
     $("blastResults").querySelectorAll("tr.go").forEach(tr => tr.onclick = () => showHitsInGraph(tr.dataset.id));
@@ -403,18 +461,119 @@
   async function runBlast() {
     const seq = $("blastSeq").value;
     if (!seq.trim()) { $("blastStatus").className = "err"; $("blastStatus").textContent = "Paste a sequence or choose a file first."; return; }
-    $("blastRun").disabled = true; $("blastStatus").className = "hint";
-    $("blastStatus").textContent = "Running blastn…"; $("blastResults").innerHTML = "";
+    
+    $("blastRun").disabled = true; 
+    $("blastStatus").className = "hint";
+    $("blastStatus").textContent = "Submitting sequence to NCBI..."; 
+    $("blastResults").innerHTML = "";
+    
     try {
-      const r = await fetch("api/blast", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sequence: seq, max_hits: +$("blastMax").value,
-          min_identity: +$("blastMinId").value || 0, min_coverage: +$("blastMinCov").value || 0 }) });
-      const res = await r.json();
-      if (!r.ok) throw new Error(res.error || r.statusText);
-      lastResult = res; renderResults(res);
+      const putParams = new URLSearchParams({
+        CMD: "Put",
+        PROGRAM: "blastn",
+        DATABASE: "nt",
+        ENTREZ_QUERY: "plasmid[filter]",
+        QUERY: seq
+      });
+
+      const putResponse = await fetch("https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi", {
+        method: "POST",
+        body: putParams,
+        headers: { "Content-Type": "application/x-www-form-urlencoded" }
+      });
+      
+      const putText = await putResponse.text();
+      const ridMatch = putText.match(/^ *RID *= *(\w+)/m);
+      
+      if (!ridMatch) throw new Error("Failed to get Request ID (RID) from NCBI.");
+      const rid = ridMatch[1];
+
+      let isReady = false;
+      while (!isReady) {
+        $("blastStatus").textContent = `Searching NCBI databases... (RID: ${rid}). This usually takes 1-3 minutes.`;
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        
+        const pollUrl = `https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi?CMD=Get&FORMAT_OBJECT=SearchInfo&RID=${rid}`;
+        const pollResponse = await fetch(pollUrl);
+        const pollText = await pollResponse.text();
+        const statusMatch = pollText.match(/^ *Status *= *(\w+)/m);
+        
+        if (statusMatch) {
+          const status = statusMatch[1];
+          if (status === "FAILED" || status === "UNKNOWN") throw new Error(`NCBI Search failed with status: ${status}`);
+          if (status === "READY") isReady = true;
+        }
+      }
+
+      $("blastStatus").textContent = "Search complete. Downloading results...";
+      const resultsUrl = `https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi?CMD=Get&FORMAT_TYPE=JSON2&RID=${rid}`;
+      const resultsResponse = await fetch(resultsUrl);
+      const jsonResult = await resultsResponse.json();
+
+      const searchObj = jsonResult.BlastOutput2[0].report.results.search;
+      const ncbiHits = searchObj.hits || [];
+      const queryLen = searchObj.query_len;
+
+      // Create a Set of your graph's base accessions to map NCBI hits
+      const graphBaseAccessions = new Map();
+      if (window.PLASMID_GRAPH.node_columns) {
+        const idIndex = window.PLASMID_GRAPH.node_columns.indexOf("id");
+        window.PLASMID_GRAPH.nodes.forEach(row => {
+          const fullId = row.id || "";
+          graphBaseAccessions.set(fullId.split('.')[0], fullId);
+        });
+      } else {
+        window.PLASMID_GRAPH.nodes.forEach(n => {
+          graphBaseAccessions.set(n.id.split('.')[0], n.id);
+        });
+      }
+
+      const minId = +$("blastMinId").value || 0;
+      const minCov = +$("blastMinCov").value || 0;
+      const maxHits = +$("blastMax").value || 50;
+
+      const formattedHits = [];
+      ncbiHits.forEach((hit) => {
+        const ncbiAccession = hit.description[0].accession;
+        const baseAccession = ncbiAccession.split('.')[0];
+        const graphId = graphBaseAccessions.get(baseAccession);
+        
+        const hsp = hit.hsps[0];
+        const identity = ((hsp.identity / hsp.align_len) * 100);
+        const queryCover = ((hsp.query_to - hsp.query_from + 1) / queryLen * 100);
+
+        if (identity >= minId && queryCover >= minCov) {
+          formattedHits.push({
+            plasmid: graphId || ncbiAccession,
+            in_graph: !!graphId,
+            identity: identity.toFixed(1),
+            query_cover: queryCover.toFixed(1),
+            evalue: hsp.evalue,
+            bitscore: hsp.bit_score,
+            subject_length: hit.description[0].scilen || 0
+          });
+        }
+      });
+
+      const finalHits = formattedHits.slice(0, maxHits);
+
+      const res = {
+        hits: finalHits,
+        query_length: queryLen,
+        min_identity: minId,
+        min_coverage: minCov,
+        before_filter: ncbiHits.length
+      };
+      
+      lastResult = res;
+      renderResults(res);
+
     } catch (e) {
-      $("blastStatus").className = "err"; $("blastStatus").textContent = "BLAST failed: " + e.message;
-    } finally { $("blastRun").disabled = !blastOnline; }
+      $("blastStatus").className = "err"; 
+      $("blastStatus").textContent = "BLAST failed: " + e.message;
+    } finally { 
+      $("blastRun").disabled = false; 
+    }
   }
 
   function openBlast() { $("blastModal").hidden = false; if (!lastResult) $("blastSeq").focus(); }
@@ -428,15 +587,11 @@
   $("blastExample").onclick = async () => {
     const r = await fetch("example_query.fasta"); if (r.ok) $("blastSeq").value = await r.text(); };
 
-  // is the BLAST server running? (it is when the page is served by server.py)
   (async () => {
-    try {
-      if (!location.protocol.startsWith("http")) throw 0;
-      const r = await fetch("api/health"); if (!r.ok) throw 0;
-      blastOnline = (await r.json()).blast === true;
-    } catch (e) { blastOnline = false; }
-    $("serverOff").hidden = blastOnline; $("blastRun").disabled = !blastOnline;
-    if (blastOnline) { try { const r = await fetch("example_query.fasta", { method: "HEAD" }); $("blastExample").hidden = !r.ok; } catch (e) {} }
+    try { 
+      const r = await fetch("example_query.fasta", { method: "HEAD" }); 
+      $("blastExample").hidden = !r.ok; 
+    } catch (e) {}
   })();
 
   function select(n, move) {
@@ -447,7 +602,7 @@
       let span = 0;
       focus.forEach(m => { const q = renderer.getNodeDisplayData(m);
         span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y)); });
-      const ratio = Math.min(1, Math.max(0.01, span * 3));
+      const ratio = focus.size > 1 ? Math.min(1, Math.max(0.01, span * 3)) : (big ? 0.08 : 0.5);
       renderer.getCamera().animate({ x: p.x, y: p.y, ratio }, { duration: 500 });
     }
   }
@@ -459,11 +614,19 @@
 
   // ---------- controls ----------
   colorBy.onchange = recolour;
+  document.getElementById("sizeBy").onchange = () => { resize(); recolour(); };
   document.getElementById("gene").onchange = recolour;
   dcj.oninput = () => {
     threshold = +dcj.value; document.getElementById("dcjVal").textContent = threshold;
     setFocus(); showInfo(selected); renderer.refresh();
   };
+  if (hasPhri) {   // PHRI
+    document.getElementById("phriWrap").hidden = false;
+    document.getElementById("minPhri").oninput = e => {
+      minPhri = +e.target.value; document.getElementById("minPhriVal").textContent = minPhri;
+      renderer.refresh();
+    };
+  }
   document.getElementById("labels").onchange = e => { showAll = e.target.checked; renderer.refresh(); };
 
   const dl = document.getElementById("plasmid-list"), byAcc = new Map();
