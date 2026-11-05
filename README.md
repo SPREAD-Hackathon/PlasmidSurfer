@@ -45,10 +45,11 @@ go?** No existing tool answers that.
 | `plasmidfinder.csv` | 60,619 | PlasmidFinder Inc typing, 40,208 plasmids, 277 replicon alleles | Good complementary backbone features |
 | `plsdb_mashdb_sim.tsv` | 525,604 | Headerless edge list of Mash-similar plasmid pairs, 32,336 plasmids | **The de-risking find — see §3** |
 | `typing_markers.csv` | 333,649 | oriT/relaxase BLAST hits, long format | Mostly redundant with `typing.csv`; skip for now |
-| `biosample.csv` | 29,222 | Country, lat/lon, ecosystem tags, disease tags | **Currently unusable — see §2.3** |
-| `taxonomy.csv` | 7,440 | NCBI lineage per TAXONOMY_UID | Unusable for the same reason |
+| `nuccore.csv` | 72,556 | **The master table.** The only bridge between accession-keyed and UID-keyed files | **The keystone — see §2.3** |
+| `biosample.csv` | 29,222 | Country, lat/lon, ecosystem tags, disease tags | Country + One-Health compartment, via `nuccore.csv` |
+| `taxonomy.csv` | 7,440 | NCBI lineage per TAXONOMY_UID | Real host taxonomy, via `nuccore.csv` |
 | `assembly.csv` | 22,065 | Assembly status, coverage, dates | Nice-to-have QC |
-| `nucc_identical.csv` | 3,906 | Only the *duplicated* nuccore records | Not the master table |
+| `nucc_identical.csv` | 3,906 | Only the *duplicated* nuccore records | Superseded by `nuccore.csv` |
 | `disease_terms.csv` | 330 | SYMP ontology definitions | Not per-plasmid. Ignore |
 | `protein.csv` (PGAP) | — | Per-gene annotation of every plasmid | **The route to an actual language model — see §9** |
 
@@ -86,38 +87,61 @@ orit_type(s)                       24.2%     PMLST_scheme                    6.2
 `predicted_mobility` splits 28,816 non-mobilizable / 22,588 conjugative /
 21,152 mobilizable — a well-balanced, fully populated feature.
 
-### 2.3 **THE MISSING TABLE — ask for this first thing tomorrow**
+### 2.3 The master table, and what it unlocks
 
-**You do not have PLSDB's master `nuccore` table, and without it the metadata
-join is broken.**
+`nuccore.csv` is the keystone. Everything annotation-side (`typing.csv`,
+`amr.tsv`, `plasmidfinder.csv`) is keyed on `NUCCORE_ACC`; everything
+metadata-side (`biosample.csv`, `taxonomy.csv`) is keyed on integer UIDs.
+`nuccore.csv` is the only bridge.
 
-`typing.csv`, `amr.tsv` and `plasmidfinder.csv` are keyed on `NUCCORE_ACC`
-(accessions). `biosample.csv` and `taxonomy.csv` are keyed on `NUCCORE_UID` /
-`BIOSAMPLE_UID` / `TAXONOMY_UID` (integers). The only file that bridges
-accessions to UIDs is `nucc_identical.csv`, which covers **3,906 of 72,556
-plasmids — 5.4%**.
+```
+typing.csv / amr.tsv / plasmidfinder.csv      keyed on NUCCORE_ACC
+                  |
+             nuccore.csv        ACC <-> NUCCORE_UID, TAXONOMY_UID, BIOSAMPLE_UID
+                  |
+      +-----------+-----------+
+ taxonomy.csv            biosample.csv
+ (host lineage)          (country, ecosystem, disease)
+```
 
-Concretely, this means that right now you **cannot** attach to a plasmid:
+**The join closes at 72,556 / 72,556 — 100%.** Resulting coverage:
 
-* its **country** — `LOCATION_name` is populated for 23,523 biosamples
-* its **collection date** — and `biosample.csv` has no collection date at all,
-  only `BIOSAMPLE_last_update`; the real date is `NUCCORE_CreateDate` in the
-  master table
-* its **ecosystem** (clinical / animal / environmental) — `ECOSYSTEM_tags`,
-  22,778 biosamples. **This is your One-Health axis and it is sitting right
-  there, unreachable.**
-* its **true host taxonomy** — `taxonomy.csv` joins on `TAXONOMY_UID`, which
-  lives in the master table
+| Field | Coverage |
+|---|---|
+| `TAXONOMY_species`, `NUCCORE_CreateDate` | 100.0% |
+| `TAXONOMY_order` | 99.4% |
+| `TAXONOMY_genus` | 99.3% |
+| `LOCATION_name` → country | 79.6% |
+| `ECOSYSTEM_tags` → One-Health compartment | 76.2% |
+| `DISEASE_group` | 14.1% |
 
-**Ask your teammate for `nuccore.csv` from the same PLSDB dump.** It is one
-file, it is in the same download, and it has columns
-`NUCCORE_ACC, NUCCORE_UID, NUCCORE_CreateDate, NUCCORE_Length, NUCCORE_Topology,
-TAXONOMY_UID, BIOSAMPLE_UID, ASSEMBLY_UID`. Getting it roughly doubles the
-quality of the label (§4) and unlocks the geographic/temporal/One-Health
-dimensions that make this a surveillance tool rather than a sequence classifier.
+Top hosts: *Escherichia* 14,804, *Klebsiella* 12,213, *Salmonella* 3,524,
+*Enterococcus* 3,231, *Staphylococcus* 3,180. Top countries: USA 2,492, UK
+2,219, **Spain 1,818**, China 1,601. Records span 1982–2024.
 
-Everything in this repo runs without it. `plrisk/config.py` already has a
-`NUCCORE` slot; §4 says exactly what to add when it arrives.
+Two fields need cleaning before use, both handled in `plrisk/metadata.py`:
+
+**`LOCATION_name` is free text at wildly varying granularity.** Real values
+include `USA`, `USA,VA`, `China,Chengdu,Sichuan`, the full geocoded
+`Leipzig Markt, Markt, center, Mitte, Leipzig, Saxony, 04109, Germany`, and
+raw coordinates `37.09N;121E`. Taken as-is there are 4,663 distinct values, so
+counting them as countries would score a lineage seen in Seville and Madrid as
+spanning two countries. `country_of()` resolves the country from any of these
+shapes (country-first, country-last, embedded) and returns missing rather than
+a guess for coordinates — better a gap than a wrong value in a diversity count.
+
+**`ECOSYSTEM_tags` is 162 tags at mixed levels of abstraction.**
+`compartments_of()` collapses them into One-Health compartments:
+`human_clinical`, `gut_carriage`, `animal_food`, `environment`, `wastewater`,
+`anthropogenic_other`. Note that the two most frequent tags — `host_associated`
+(18,102) and `cell_culture` (6,849) — deliberately map to nothing: they say a
+sample came from a host or a culture, not which compartment it belongs to, and
+guessing would manufacture signal.
+
+**One caveat to state on a slide:** `NUCCORE_CreateDate` is the NCBI *record
+creation* date, not a collection date. It lags isolation and clusters around
+submission campaigns. Fine as a coarse "how long has this lineage been in the
+record" proxy; not evidence about any particular year.
 
 ### 2.4 "We wanted to use the sequences"
 
@@ -167,29 +191,45 @@ Total: 72,556 plasmids in 12,900 lineages.
 ## 4. The label
 
 There is no `risk` column in PLSDB, so the target is **observed dissemination
-success of a lineage**, computed per group:
+success of a lineage**, computed per group.
+
+**Always available (`--label taxonomic`):**
 
 | Component | Meaning |
 |---|---|
-| `group_size` | how many distinct PLSDB records fall in this lineage — direct evidence of repeated independent recovery |
-| `n_host_genera` | distinct host genera the lineage has been seen in — cross-genus spread is the epidemiologically alarming part |
+| `group_size` | distinct PLSDB records in the lineage — direct evidence of repeated independent recovery |
+| `n_host_genera` | distinct host genera — cross-genus spread is the epidemiologically alarming part |
 | `host_rank_max` | MOB-suite `observed_host_range_ncbi_rank`, ordinal from species → multi-phylla |
 
-Each is rank-transformed to [0,1], averaged, and converted to a percentile. A
-score of 80 means *"this lineage has spread more widely than 80% of lineages in
-PLSDB"*.
+**Added with `nuccore.csv` (`--label full`, the default):**
 
-Rank-transforming rather than z-scoring is deliberate: all three are heavily
-right-skewed count variables and only the ordering is meaningful.
+| Component | Meaning |
+|---|---|
+| `n_countries` | geographic spread |
+| `n_compartments` | distinct One-Health compartments — **the clinical–community–environment axis** |
+| `year_span` | persistence in the record over time |
 
-Each component correlates with the composite at ρ ≈ 0.73–0.80, so no single one
-dominates.
+With the metadata join, the host genus also switches from the MOB-suite
+nearest-neighbour *proxy* to real NCBI taxonomy for 99.3% of plasmids.
 
-**When `nuccore.csv` arrives**, add to `plrisk/labels.py`: distinct countries,
-year span, distinct ecosystem tags, and replace the host-genus *proxy* (derived
-from `mash_neighbor_identification`) with the real `TAXONOMY_genus`. That turns
-the label from "taxonomic breadth" into genuine epidemiological spread across
-the clinical–community–environment interface.
+Each component is rank-transformed to [0,1], averaged, and converted to a
+percentile. A score of 80 means *"this lineage has spread more widely than 80%
+of lineages in PLSDB"*. Rank-transforming rather than z-scoring is deliberate:
+these are all heavily right-skewed count variables and only the ordering is
+meaningful.
+
+### Small lineages are handled separately, and here is why
+
+A lineage with two members can only ever show one or two countries, so its
+`n_countries` is driven by lineage *size* rather than by real geographic
+spread. Feeding that into the composite injects noise exactly where the label
+is already weakest — and 7,072 of 12,900 lineages have fewer than three
+members.
+
+So for lineages below `min_members_for_metadata` (default 3), the composite is
+built from the always-available components only, then rescaled onto the same
+percentile scale. This was not a theoretical worry: the first version without
+it produced a label the model could not learn at all (see §7).
 
 ### The bias you must state out loud
 
@@ -395,7 +435,23 @@ out/model.pkl                trained model + feature order + cargo floor
 out/metrics.json             grouped CV, per fold, and all baselines
 out/feature_importance.csv   permutation importance
 out/oof_predictions.csv      out-of-fold predictions for plotting
+out/figures/*.png            slide-ready figures (python figures.py)
 ```
+
+### Figures
+
+```bash
+python figures.py                      # reads out/
+python figures.py --out sweep_full_all # any run directory
+```
+
+| File | The question it answers |
+|---|---|
+| `fig1_leakage.png` | Why grouped CV. **The methods slide.** |
+| `fig2_label.png` | What "dissemination" is actually made of |
+| `fig3_performance.png` | Predicted vs observed, and the baseline comparison |
+| `fig4_importance.png` | Which backbone features the model reads |
+| `fig5_risk_space.png` | The two-component risk plane. **The product slide.** |
 
 ---
 
@@ -459,6 +515,7 @@ better slide than a transformer with no baseline.
 
 ```
 plrisk/config.py     paths + tunable constants — the only file to edit
+plrisk/metadata.py   nuccore join, country normalisation, One-Health mapping
 plrisk/grouping.py   PLING / Mash / MOB-suite lineage assignment
 plrisk/labels.py     dissemination success, per lineage
 plrisk/features.py   backbone feature matrix + the leakage guard
