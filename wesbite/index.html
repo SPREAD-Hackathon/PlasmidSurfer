@@ -86,7 +86,7 @@
   <h1>Plasmid relatedness explorer</h1>
   <label>Find <input id="search" list="plasmid-list" placeholder="plasmid name or accession"></label>
   <datalist id="plasmid-list"></datalist>
-  <button id="blastBtn" class="btn" type="button">BLAST search</button>
+  <button id="blastBtn" class="btn" type="button">PLSDB search</button>
   <label>Colour by <select id="colorBy"></select></label>
   <label id="geneWrap" hidden>gene <select id="gene"></select></label>
   <label>Dot size <select id="sizeBy"><option value="length">plasmid length</option><option value="relatives">number of relatives</option><option value="same">all the same</option></select></label>
@@ -106,12 +106,19 @@
 <div id="blastModal" class="modal" hidden>
   <div class="dialog" role="dialog" aria-labelledby="blastTitle">
     <button class="x" id="blastClose" aria-label="Close">×</button>
-    <h2 id="blastTitle">BLAST a plasmid sequence</h2>
-    <p class="hint" style="margin:0">Runs <b>blastn</b> (megablast) against NCBI databases and lists the best hits. Click a hit to find it in the graph, or show all hits at once.</p>
+    <h2 id="blastTitle">Search plasmid sequence via PLSDB</h2>
+    <p class="hint" style="margin:0">Runs <b>Mash</b> or <b>BLASTn</b> against the PLSDB database and lists the best hits. Click a hit to find it in the graph, or show all hits at once.</p>
     <textarea id="blastSeq" spellcheck="false" placeholder=">my_plasmid&#10;Paste a DNA sequence or FASTA record here, or choose a file below"></textarea>
     <div class="row">
       <input type="file" id="blastFile" accept=".fa,.fasta,.fna,.fas,.txt,.seq">
       <button class="btn ghost" id="blastExample" type="button" hidden>Load example</button>
+      <label style="color:var(--muted);font-size:13px">Method
+        <select id="blastMethod">
+          <option value="mash_dist" selected>Mash dist (whole plasmid — fast)</option>
+          <option value="mash_screen">Mash screen (containment)</option>
+          <option value="blastn">BLASTn (short sequences / genes)</option>
+        </select>
+      </label>
       <label style="color:var(--muted);font-size:13px">Max hits
         <select id="blastMax"><option>25</option><option selected>50</option><option>100</option><option>250</option></select></label>
       <label style="color:var(--muted);font-size:13px">Min identity
@@ -119,7 +126,7 @@
       <label style="color:var(--muted);font-size:13px">Min query cover
         <input id="blastMinCov" type="number" min="0" max="100" step="1" value="0" style="width:64px"> %</label>
       <span style="flex:1"></span>
-      <button class="btn" id="blastRun" type="button">Run blastn</button>
+      <button class="btn" id="blastRun" type="button">Run PLSDB search</button>
     </div>
     <div id="blastStatus" class="hint"></div>
     <div id="blastResults"></div>
@@ -165,7 +172,7 @@
   ];
   const OTHER = "#9a9a94", ABSENT = "#cfcfc8";
 
-  // OPTIMIZATION 1: Cache CSS custom properties once at startup (never inside reducers)
+  // Cache CSS custom properties once at startup (never inside reducers)
   const rootStyle = getComputedStyle(document.documentElement);
   const css = n => rootStyle.getPropertyValue(n).trim();
   const COLOR_TEXT = css("--text");
@@ -192,7 +199,7 @@
   });
 
   let maxD = 0;
-  const edgeDistCounts = new Map(); // Precompute edge counts per DCJ distance
+  const edgeDistCounts = new Map();
 
   DATA.edges.forEach(([s, t, d]) => {
     if (typeof s === "number") { s = DATA.nodes[s].id; t = DATA.nodes[t].id; }
@@ -200,7 +207,6 @@
     if (d > maxD) maxD = d;
     edgeDistCounts.set(d, (edgeDistCounts.get(d) || 0) + 1);
 
-    // OPTIMIZATION 2: Precompute edge metadata once so edgeReducer does zero lookups
     const sameType = graph.getNodeAttribute(s, "pling_type") === graph.getNodeAttribute(t, "pling_type");
     const baseSize = Math.max(0.6, 3.2 - 0.5 * d);
     graph.addEdge(s, t, {
@@ -236,7 +242,6 @@
   }
   resize();
 
-  // OPTIMIZATION 3: Enable barnesHutOptimize for O(V log V) ForceAtlas2 layout
   if (DATA.nodes.length && DATA.nodes[0].x === undefined) {
     const FA2 = graphologyLibrary.layoutForceAtlas2;
     const settings = Object.assign(FA2.inferSettings(graph), {
@@ -264,7 +269,7 @@
     const nodes = DATA.nodes;
     for (let i = 0; i < nodes.length; i++) {
       s.add(nodes[i][c]);
-      if (s.size > limit) return s.size; // Early exit once limit exceeded
+      if (s.size > limit) return s.size;
     }
     return s.size;
   };
@@ -382,12 +387,10 @@
       });
     }
     if (renderer) {
-      // Only pay the cost of rendering edge labels when a node is actively focused
       renderer.setSetting("renderEdgeLabels", Boolean(n));
     }
   }
 
-  // OPTIMIZATION 4: Throttle refreshes via requestAnimationFrame & skipIndexation
   let rafId = 0;
   function scheduleRefresh() {
     if (rafId) return;
@@ -400,7 +403,7 @@
   recolour();
 
   renderer = new Sigma(graph, document.getElementById("graph"), {
-    renderEdgeLabels: false, // Toggled dynamically only when a node is hovered/selected
+    renderEdgeLabels: false,
     labelRenderedSizeThreshold: graph.order > 1000 ? 14 : 9,
     labelColor: { color: COLOR_TEXT },
     edgeLabelColor: { color: COLOR_MUTED },
@@ -487,7 +490,7 @@
     if (a.relatives !== undefined) rows.push(["PLING relatives", `${a.relatives.toLocaleString()} with DCJ ≤ 4`]);
     if (hits.has(n)) {
       const h = hits.get(n);
-      rows.unshift(["BLAST hit", `<span class="chip">#${h.rank}</span> ${h.identity}% identity, ${h.query_cover}% query cover`]);
+      rows.unshift(["PLSDB hit", `<span class="chip">#${h.rank}</span> ${h.identity}% identity, ${h.query_cover}% coverage`]);
     }
     metaCols.forEach(c => {
       let v = a[c] ?? "";
@@ -511,31 +514,32 @@
       }).join("")}</ul>` : '<p class="hint">None within this distance. Raise the Max DCJ distance slider to see more distant relatives.</p>'}
       ${nbs.length > within.length ? `<p class="hint">${nbs.length - within.length} more at larger distances are hidden.</p>` : ""}
       ${TOPK && a.relatives > nbs.length ? `<p class="hint">To keep this view fast, each plasmid shows only its ${TOPK} closest relatives plus any that list it among theirs (${nbs.length} of ${a.relatives.toLocaleString()} here).</p>` : ""}`;
-    if (hits.size) info.insertAdjacentHTML("beforeend", '<p><button class="btn ghost" id="backHits" type="button">← Back to BLAST hits</button></p>');
+    if (hits.size) info.insertAdjacentHTML("beforeend", '<p><button class="btn ghost" id="backHits" type="button">← Back to PLSDB hits</button></p>');
     const back = document.getElementById("backHits"); if (back) back.onclick = () => select(null);
     info.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id, true));
   }
 
-  // ---------- BLAST ----------
+  // ---------- PLSDB API SEARCH ----------
   const $ = id => document.getElementById(id);
   const fmtE = e => e === 0 ? "0" : (+e).toExponential(1);
   let lastResult = null;
 
-  // Precompute base accession map once instead of rebuilding per BLAST run
   const graphBaseAccessions = new Map();
   graph.forEachNode((n, a) => {
     graphBaseAccessions.set(n.split(".")[0], n);
     if (a.accession) graphBaseAccessions.set(String(a.accession).split(".")[0], n);
   });
 
+  const PLSDB_SEQ_URL = "https://ccb-microbe.cs.uni-saarland.de/plsdb2025/api/sequence";
+
   function showHitsPanel() {
     const list = [...hits.values()].sort((x, y) => x.rank - y.rank);
-    info.innerHTML = `<h2>BLAST hits in the graph (${list.length})</h2>
+    info.innerHTML = `<h2>PLSDB hits in the graph (${list.length})</h2>
       <p class="hint">Hits are highlighted; everything else is greyed out. Click a hit to see its details and PLING relatives.</p>
-      <p><button class="btn ghost" id="clearHits" type="button">Clear BLAST hits</button>
+      <p><button class="btn ghost" id="clearHits" type="button">Clear PLSDB hits</button>
          <button class="btn ghost" id="reopenBlast" type="button">Results table</button></p>
       <ul class="nb">${list.map(h => `<li data-id="${esc(h.plasmid)}"><span><span class="chip">#${h.rank}</span> ${esc(h.plasmid)}<br>
-        <span class="hint" style="font-size:12px">${esc(graph.getNodeAttribute(h.plasmid, "host") || "")} · ${esc(graph.getNodeAttribute(h.plasmid, giant ? "pling_type" : "community") || "")}</span></span>
+        <span class="hint" style="font-size:12px">${esc(graph.getNodeAttribute(h.plasmid, "host") || h.host || "")} · ${esc(graph.getNodeAttribute(h.plasmid, giant ? "pling_type" : "community") || "")}</span></span>
         <span class="d">${h.identity}% · ${h.query_cover}%</span></li>`).join("")}</ul>`;
     $("clearHits").onclick = () => { hits = new Map(); select(null); };
     $("reopenBlast").onclick = openBlast;
@@ -551,9 +555,9 @@
     let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
     hits.forEach((h, id) => {
       const d = renderer.getNodeDisplayData(id);
-      x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x); y0 = Math.min(y0, d.y); y1 = Math.max(y1, d.y);
+      if (d) { x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x); y0 = Math.min(y0, d.y); y1 = Math.max(y1, d.y); }
     });
-    if (hits.size) renderer.getCamera().animate({
+    if (hits.size && x0 <= x1) renderer.getCamera().animate({
       x: (x0 + x1) / 2, y: (y0 + y1) / 2,
       ratio: Math.min(1, Math.max(0.02, Math.max(x1 - x0, y1 - y0) * 1.4))
     }, { duration: 600 });
@@ -561,24 +565,34 @@
 
   function renderResults(res) {
     const inGraph = res.hits.filter(h => h.in_graph).length;
+    const isMash = res.method !== "blastn";
     $("blastStatus").className = "hint";
     const filt = (res.min_identity || res.min_coverage)
-      ? ` · filters: identity ≥ ${res.min_identity}%, query cover ≥ ${res.min_coverage}% (${res.before_filter} hits before filtering)` : "";
+      ? ` · filters: identity ≥ ${res.min_identity}%, cover/hashes ≥ ${res.min_coverage}% (${res.before_filter} hits before filtering)` : "";
     $("blastStatus").textContent = (res.hits.length
-      ? `Query ${res.query_length.toLocaleString()} bp · ${res.hits.length} hits (${inGraph} in the graph), best first`
-      : `Query ${res.query_length.toLocaleString()} bp · no hits pass (E-value ≤ 1e-10)`) + filt + ".";
+      ? `Query ${res.query_length.toLocaleString()} bp (${res.method}) · ${res.hits.length} hits (${inGraph} in the graph), best first`
+      : `Query ${res.query_length.toLocaleString()} bp (${res.method}) · no hits pass thresholds`) + filt + ".";
     if (!res.hits.length) { $("blastResults").innerHTML = ""; return; }
     const g = id => graph.hasNode(id) ? graph.getNodeAttributes(id) : null;
     $("blastResults").innerHTML = `<div class="row"><button class="btn" id="showHits" type="button">Show all ${inGraph} hits in the graph</button></div>
-      <table class="hits"><thead><tr><th>#</th><th>Plasmid</th><th>Identity</th><th>Query cover</th><th>E-value</th><th>Bit score</th>
-      <th>Length</th><th>Host</th><th>Country</th><th>Year</th><th>${giant ? "PLING subcommunity" : "PLING community"}</th></tr></thead><tbody>
+      <table class="hits"><thead><tr>
+        <th>#</th><th>Plasmid</th><th>Identity</th>
+        <th>${isMash ? "Shared hashes" : "Query cover"}</th>
+        <th>${isMash ? "P-value" : "E-value"}</th>
+        <th>${isMash ? "Mash dist" : "Bit score"}</th>
+        <th>Length</th><th>Host</th><th>Country</th><th>Year</th>
+        <th>${giant ? "PLING subcommunity" : "PLING community"}</th>
+      </tr></thead><tbody>
       ${res.hits.map((h, i) => {
         const a = g(h.plasmid);
         return `<tr class="${a ? "go" : ""}" data-id="${esc(h.plasmid)}" title="${a ? "Show in graph" : "Not in the graph"}">
-          <td>${i + 1}</td><td>${esc(h.plasmid)}</td><td class="num">${h.identity}%</td><td class="num">${h.query_cover}%</td>
-          <td class="num">${fmtE(h.evalue)}</td><td class="num">${h.bitscore.toLocaleString()}</td>
-          <td class="num">${(h.subject_length || 0).toLocaleString()}</td>
-          <td>${esc(a ? a.host || "" : "")}</td><td>${esc(a ? a.country || "" : "")}</td>
+          <td>${i + 1}</td><td>${esc(h.plasmid)}</td><td class="num">${h.identity}%</td>
+          <td class="num">${isMash && h.shared_hashes ? esc(h.shared_hashes) : h.query_cover + "%"}</td>
+          <td class="num">${fmtE(h.evalue)}</td>
+          <td class="num">${isMash ? h.mash_dist : Number(h.bitscore).toLocaleString()}</td>
+          <td class="num">${(h.subject_length || (a && +a.length_bp) || 0).toLocaleString()}</td>
+          <td>${esc(a ? a.host || "" : h.host || "")}</td>
+          <td>${esc(a ? a.country || "" : h.country || "")}</td>
           <td>${esc(a ? (a[dateCol] || "").slice(0, 4) : "")}</td>
           <td>${a ? esc(giant ? a.pling_type : a.community) : '<span class="hint">not in graph</span>'}</td></tr>`;
       }).join("")}
@@ -588,108 +602,141 @@
   }
 
   async function runBlast() {
-    const seq = $("blastSeq").value;
-    if (!seq.trim()) {
+    let raw = $("blastSeq").value.trim();
+    if (!raw) {
       $("blastStatus").className = "err";
       $("blastStatus").textContent = "Paste a sequence or choose a file first.";
       return;
     }
 
+    if (!raw.startsWith(">")) raw = ">query_plasmid\n" + raw;
+    const queryLen = raw
+      .split(/\r?\n/)
+      .filter(line => !line.startsWith(">"))
+      .join("")
+      .replace(/[^A-Za-z]/g, "").length;
+
+    const methodEl = $("blastMethod");
+    const searchType = methodEl ? methodEl.value : (queryLen < 3000 ? "blastn" : "mash_dist");
+    const maxHits = +$("blastMax").value || 50;
+    const minId = +$("blastMinId").value || 0;
+    const minCov = +$("blastMinCov").value || 0;
+
     $("blastRun").disabled = true;
     $("blastStatus").className = "hint";
-    $("blastStatus").textContent = "Submitting sequence to NCBI...";
+    $("blastStatus").textContent = `Submitting sequence to PLSDB (${searchType})...`;
     $("blastResults").innerHTML = "";
 
     try {
-      const maxHits = +$("blastMax").value || 50;
-      const putParams = new URLSearchParams({
-        CMD: "Put",
-        PROGRAM: "blastn",
-        MEGABLAST: "on",
-        DATABASE: "nt",
-        ENTREZ_QUERY: "plasmid[filter]",
-        HITLIST_SIZE: String(maxHits),
-        QUERY: seq
-      });
+      const formData = new FormData();
+      formData.append("fasta_file", new Blob([raw], { type: "text/plain" }), "query.fasta");
+      formData.append("search_type", searchType);
 
-      const putResponse = await fetch("/api/ncbi-blast", {
-        method: "POST",
-        body: putParams,
-        headers: { "Content-Type": "application/x-www-form-urlencoded" }
-      });
+      if (searchType === "mash_dist") {
+        formData.append("mash_max_v", "0.1");
+        formData.append("mash_max_d", minId > 0 ? String(Math.max(0.01, (100 - minId) / 100)) : "0.2");
+      } else if (searchType === "mash_screen") {
+        formData.append("mash_max_v", "0.1");
+        formData.append("mash_min_i", minId > 0 ? String(minId / 100) : "0.9");
+      } else if (searchType === "blastn") {
+        if (minId > 0) formData.append("blastn_min_i", String(minId));
+        if (minCov > 0) formData.append("blastn_min_c", String(minCov));
+      }
 
-      const putText = await putResponse.text();
-      const ridMatch = putText.match(/^ *RID *= *(\w+)/m);
-      if (!ridMatch) throw new Error("Failed to get Request ID (RID) from NCBI.");
-      const rid = ridMatch[1];
+      const postResp = await fetch(PLSDB_SEQ_URL, { method: "POST", body: formData });
+      if (!postResp.ok) throw new Error(`PLSDB submission returned HTTP ${postResp.status}`);
+      const postData = await postResp.json();
+      const jobId = postData.job_id;
+      if (!jobId) throw new Error(postData.label || postData.message || "No job_id returned from PLSDB.");
 
-      let isReady = false;
-      let delay = 4000; // Adaptive polling (starts at 4s instead of waiting 10s immediately)
-      while (!isReady) {
-        $("blastStatus").textContent = `Searching NCBI databases... (RID: ${rid}). This usually takes 1-3 minutes.`;
-        await new Promise(resolve => setTimeout(resolve, delay));
-        delay = Math.min(10000, delay + 2000);
+      let rows = null;
+      const startTime = Date.now();
+      while (!rows) {
+        await new Promise(r => setTimeout(r, 1500));
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        $("blastStatus").textContent = `Searching PLSDB (${searchType}, ${elapsed}s)...`;
 
-        const pollUrl = `/api/ncbi-blast?CMD=Get&FORMAT_OBJECT=SearchInfo&RID=${rid}`;
-        const pollResponse = await fetch(pollUrl);
-        const pollText = await pollResponse.text();
-        const statusMatch = pollText.match(/^ *Status *= *(\w+)/m);
+        const pollResp = await fetch(`${PLSDB_SEQ_URL}?job_id=${encodeURIComponent(jobId)}`);
+        if (!pollResp.ok) throw new Error(`PLSDB polling failed (HTTP ${pollResp.status})`);
+        const pollData = await pollResp.json();
 
-        if (statusMatch) {
-          const status = statusMatch[1];
-          if (status === "FAILED" || status === "UNKNOWN") throw new Error(`NCBI Search failed with status: ${status}`);
-          if (status === "READY") isReady = true;
+        if (Array.isArray(pollData)) {
+          rows = pollData;
+        } else if (Array.isArray(pollData.data)) {
+          rows = pollData.data;
+        } else if (Array.isArray(pollData.results)) {
+          rows = pollData.results;
+        } else {
+          const state = String(pollData.label || pollData.status || "").toLowerCase();
+          if (state.includes("fail") || state.includes("error") || state.includes("invalid")) {
+            throw new Error(`PLSDB job failed: ${pollData.label || pollData.status}`);
+          }
         }
       }
 
-      $("blastStatus").textContent = "Search complete. Downloading results...";
-      const resultsUrl = `/api/ncbi-blast?CMD=Get&FORMAT_TYPE=JSON2&HITLIST_SIZE=${maxHits}&RID=${rid}`;
-      const resultsResponse = await fetch(resultsUrl);
-      const jsonResult = await resultsResponse.json();
-
-      const searchObj = jsonResult.BlastOutput2[0].report.results.search;
-      const ncbiHits = searchObj.hits || [];
-      const queryLen = searchObj.query_len;
-
-      const minId = +$("blastMinId").value || 0;
-      const minCov = +$("blastMinCov").value || 0;
-
       const formattedHits = [];
-      ncbiHits.forEach(hit => {
-        const ncbiAccession = hit.description[0].accession;
-        const baseAccession = ncbiAccession.split(".")[0];
-        const graphId = graphBaseAccessions.get(baseAccession);
+      rows.forEach(row => {
+        const rawAcc = String(row.NUCCORE_ACC || row.ACCESSION || row.accession || row.sseqid || "");
+        if (!rawAcc) return;
+        const baseAcc = rawAcc.split(".")[0];
+        const graphId = graphBaseAccessions.get(baseAcc);
+        const nodeAttrs = graphId ? graph.getNodeAttributes(graphId) : null;
 
-        const hsp = hit.hsps[0];
-        const identity = (hsp.identity / hsp.align_len) * 100;
-        const queryCover = ((hsp.query_to - hsp.query_from + 1) / queryLen) * 100;
+        let identity = 0, queryCover = 100, evalue = 0, bitscore = 0, mashDist = "", sharedHashes = "";
+
+        if (searchType === "blastn") {
+          identity = +(row.pident ?? row.identity ?? 0);
+          queryCover = +(row.qcovs ?? row.qcovhsp ?? row.query_cover ?? 100);
+          evalue = +(row.evalue ?? 0);
+          bitscore = +(row.bitscore ?? row.bit_score ?? 0);
+        } else {
+          const dist = +(row.distance ?? row.mash_dist ?? (row.identity !== undefined ? 1 - +row.identity : 0));
+          mashDist = dist.toFixed(4);
+          identity = row.identity !== undefined
+            ? (+row.identity <= 1 ? +row.identity * 100 : +row.identity)
+            : Math.max(0, (1 - dist) * 100);
+          evalue = +(row.pvalue ?? row.p_value ?? 0);
+          sharedHashes = String(row.shared_hashes || row["shared-hashes"] || "");
+          if (sharedHashes.includes("/")) {
+            const [sh, tot] = sharedHashes.split("/").map(Number);
+            if (tot > 0) queryCover = (sh / tot) * 100;
+          }
+          bitscore = Math.round(queryCover * 10) / 10;
+        }
 
         if (identity >= minId && queryCover >= minCov) {
           formattedHits.push({
-            plasmid: graphId || ncbiAccession,
+            plasmid: graphId || rawAcc,
             in_graph: !!graphId,
             identity: identity.toFixed(1),
             query_cover: queryCover.toFixed(1),
-            evalue: hsp.evalue,
-            bitscore: hsp.bit_score,
-            subject_length: hit.description[0].scilen || 0
+            shared_hashes: sharedHashes,
+            mash_dist: mashDist,
+            evalue,
+            bitscore,
+            subject_length: +(row.NUCCORE_Length || row.LENGTH || row.length || (nodeAttrs && nodeAttrs.length_bp) || 0),
+            host: row.TAXONOMY_species || row.BIOSAMPLE_host || "",
+            country: row.LOC_country || ""
           });
         }
       });
 
+      formattedHits.sort((a, b) => (+b.identity - +a.identity) || (+b.bitscore - +a.bitscore));
+
       const res = {
+        method: searchType,
         hits: formattedHits.slice(0, maxHits),
         query_length: queryLen,
         min_identity: minId,
         min_coverage: minCov,
-        before_filter: ncbiHits.length
+        before_filter: rows.length
       };
 
       lastResult = res;
       renderResults(res);
     } catch (e) {
       $("blastStatus").className = "err";
-      $("blastStatus").textContent = "BLAST failed: " + e.message;
+      $("blastStatus").textContent = "PLSDB search failed: " + e.message;
     } finally {
       $("blastRun").disabled = false;
     }
@@ -723,10 +770,10 @@
       let span = 0;
       focus.forEach(m => {
         const q = renderer.getNodeDisplayData(m);
-        span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y));
+        if (q && p) span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y));
       });
       const ratio = focus.size > 1 ? Math.min(1, Math.max(0.01, span * 3)) : (big ? 0.08 : 0.5);
-      renderer.getCamera().animate({ x: p.x, y: p.y, ratio }, { duration: 500 });
+      if (p) renderer.getCamera().animate({ x: p.x, y: p.y, ratio }, { duration: 500 });
     }
   }
 
@@ -761,7 +808,7 @@
   }
   document.getElementById("labels").onchange = e => { showAll = e.target.checked; scheduleRefresh(); };
 
-  // OPTIMIZATION 5: Lazy-populate <datalist> on input (max 50 matches) to avoid DOM bloat
+  // Lazy-populate <datalist> on input (max 50 matches) to prevent DOM bloat
   const dl = document.getElementById("plasmid-list");
   const searchInput = document.getElementById("search");
   const byAcc = new Map();
