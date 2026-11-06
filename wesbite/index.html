@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Plasmid Relatedness Explorer</title>
+<title>PlasmidSurfer</title>
+<link rel="icon" type="image/png" href="mark.png">
 <style>
   /* always light: white page, white graph area */
   :root {
@@ -21,7 +22,14 @@
   header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center;
            padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
   #logo { height: 56px; margin: -8px 0; width: auto; display: block; }
-  header h1 { font-size: 16px; margin: 0 8px 0 0; font-weight: 650; }
+  /* Wordmark: the logo's own two-tone split, navy + teal, set tight so it
+     reads as one word the way the drawn logo does. */
+  header h1 { font-size: 19px; margin: 0 8px 0 0; font-weight: 800;
+              letter-spacing: -.015em; white-space: nowrap; }
+  header h1 .b1 { color: #15306b; }
+  header h1 .b2 { color: #15b8c4; }
+  #splash { display: block; width: 100%; max-width: 280px; height: auto;
+            margin: -4px 0 10px; }
   header label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
   input, select { font: inherit; color: var(--text); background: var(--field);
                   border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
@@ -31,9 +39,21 @@
   #graph { position: relative; min-height: 0; }
   #legend { position: absolute; left: 12px; bottom: 12px; background: var(--panel);
             border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
-            max-height: 45%; overflow: auto; font-size: 12px; max-width: 360px; z-index: 5; }
+            max-height: 45%; overflow: auto; font-size: 12px; max-width: 260px; z-index: 5; }
   #legend div { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
   #legend span.sw { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  /* Legend rows are buttons: clicking one isolates that category in the graph. */
+  #legend div.row { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin: 0 -4px; }
+  #legend div.row:hover { background: var(--hover, rgba(127,127,127,.14)); }
+  #legend div.row.on { background: var(--sel, rgba(16,122,101,.16)); font-weight: 600; }
+  #legend div.hd { color: var(--muted); margin-bottom: 4px; justify-content: space-between; }
+  #legend button.clr { font: inherit; color: var(--accent, #0b7a63); background: none;
+                       border: 0; padding: 0 0 0 8px; cursor: pointer; text-decoration: underline; }
+  /* Members of a selected legend group: a scrollable grid, not one long line. */
+  #member-list { max-height: 240px; overflow: auto; display: flex; flex-wrap: wrap;
+                 gap: 4px 10px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  #member-list a { color: var(--accent, #0b7a63); text-decoration: none; }
+  #member-list a:hover { text-decoration: underline; }
   aside { border-left: 1px solid var(--border); background: var(--panel); overflow: auto; padding: 16px; }
   aside h2 { font-size: 15px; margin: 0 0 4px; word-break: break-all; }
   aside h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
@@ -49,6 +69,51 @@
   ul.nb li:hover { color: var(--accent); }
   ul.nb li .d { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .note { margin-top: 18px; font-size: 12px; color: var(--muted); }
+
+  /* ---------- risk verdict + score bars ---------- */
+  .verdict { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px;
+             padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); }
+  .verdict .dot { width: 14px; height: 14px; border-radius: 50%; flex: none; }
+  .verdict .label { font-weight: 650; font-size: 15px; line-height: 1.1; }
+  .verdict .sub { color: var(--muted); font-size: 12px; }
+  /* Four bands. Colours carry meaning, so each one also ships its own text
+     label -- never colour alone. */
+  .v-low    { background: #eef8f3; } .v-low    .dot { background: #1baf7a; }
+  .v-mod    { background: #fdf5e7; } .v-mod    .dot { background: #eda100; }
+  .v-high   { background: #fdefe8; } .v-high   .dot { background: #eb6834; }
+  .v-severe { background: #fcebeb; } .v-severe .dot { background: #d6332f; }
+
+  .bars { margin: 10px 0 4px; }
+  .bar { display: grid; grid-template-columns: 94px 1fr 38px; align-items: center;
+         gap: 8px; margin: 5px 0; }
+  .bar .nm { color: var(--muted); font-size: 12px; }
+  .bar .track { display: block; background: var(--field); border-radius: 4px;
+                height: 10px; overflow: hidden; }
+  /* display:block is load-bearing: these are <span>s, and percentage width
+     and height do not apply to inline elements -- without it the bars render
+     as empty tracks. */
+  .bar .fill { display: block; height: 10px; min-width: 2px; border-radius: 4px; }
+  .bar .val { text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+  /* ---------- community epidemiology ---------- */
+  .epi-h { margin: 18px 0 8px; font-size: 11px; font-weight: 700;
+           letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+  .epi { display: grid; grid-template-columns: 112px 1fr; gap: 7px 10px;
+         align-items: baseline; font-size: 13px; }
+  .epi .k { color: var(--muted); }
+  .epi .v { color: var(--ink); }
+  .epi .big { font-size: 16px; font-weight: 650; }
+  .epi .sub { display: block; color: var(--muted); font-size: 11.5px;
+              margin-top: 2px; line-height: 1.35; }
+  .meter { background: var(--field); border-radius: 4px; height: 7px;
+           overflow: hidden; margin-top: 5px; max-width: 150px; }
+  .meter span { display: block; height: 7px; border-radius: 4px;
+                background: #1baf7a; }
+  .meter.low span { background: #eda100; }
+  .meter.vlow span { background: #eb6834; }
+
+  .gun { display: inline-block; background: #fcebeb; color: #a3201d;
+         border: 1px solid #f3c9c7; border-radius: 4px; padding: 1px 6px;
+         font-size: 12px; font-weight: 600; }
   .btn { font: inherit; font-size: 13px; border: 1px solid var(--accent); background: var(--accent); color: #fff;
          border-radius: 6px; padding: 5px 12px; cursor: pointer; }
   .btn.ghost { background: transparent; color: var(--accent); }
@@ -63,6 +128,8 @@
               resize: vertical; }
   #blastStatus { margin-top: 10px; font-size: 13px; }
   #blastStatus.err { color: #b3261e; }
+  .server-off { background: #fff6e5; border: 1px solid #f0d9a8; border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 13px; }
+  .server-off code { background: #fff; padding: 1px 4px; border-radius: 4px; }
   table.hits { margin-top: 14px; font-size: 13px; }
   table.hits th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 4px 8px 4px 0;
                   border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -81,22 +148,24 @@
 </head>
 <body>
 <header>
-  <!-- put the logo file next to index.html, named logo.jpeg; it is hidden if the file is missing -->
-  <img id="logo" src="logo.jpeg" alt="ESGMAP" onerror="this.remove()">
-  <h1>Plasmid relatedness explorer</h1>
+  <!-- mark.png is the surfer; it is simply removed if the file is missing -->
+  <img id="logo" src="mark.png" alt="" onerror="this.remove()">
+  <h1><span class="b1">Plasmid</span><span class="b2">Surfer</span></h1>
   <label>Find <input id="search" list="plasmid-list" placeholder="plasmid name or accession"></label>
   <datalist id="plasmid-list"></datalist>
   <button id="blastBtn" class="btn" type="button">PLSDB search</button>
   <label>Colour by <select id="colorBy"></select></label>
   <label id="geneWrap" hidden>gene <select id="gene"></select></label>
-  <label>Dot size <select id="sizeBy"><option value="length">plasmid length</option><option value="relatives">number of relatives</option><option value="same">all the same</option></select></label>
   <label>Max DCJ distance <input id="dcj" type="range" min="0" max="10" step="1" value="4"> <b id="dcjVal">4</b></label>
-  <label id="phriWrap" hidden title="Public health risk index: hide plasmids scoring below this">Min PHRI <input id="minPhri" type="range" min="0" max="9.5" step="0.5" value="0"> <b id="minPhriVal">0</b></label><!-- PHRI -->
   <label><input id="labels" type="checkbox"> all labels</label>
+  <label><input id="crossEdges" type="checkbox"> links between communities</label>
 </header>
 <main>
   <div id="graph"><div id="legend"></div></div>
   <aside id="info">
+    <!-- The full artwork belongs on the empty state, where there is room for
+         it; the header gets the surfer alone so the wordmark stays legible. -->
+    <img id="splash" src="logo.png" alt="PlasmidSurfer" onerror="this.remove()">
     <h2>No plasmid selected</h2>
     <p class="hint">Click a plasmid in the graph, or type its name in Find. Links join plasmids PLING considers related; shorter DCJ distance means fewer structural rearrangements apart.</p>
     <div id="summary"></div>
@@ -137,159 +206,83 @@
 <script src="lib/graphology-library.min.js"></script>
 <script src="lib/sigma.min.js"></script>
 <script src="data.js"></script>
-<script src="phri.js"></script><!-- PHRI add-on; the page works the same without it -->
 <script>
 (function () {
   const DATA = window.PLASMID_GRAPH;
-  if (DATA.node_columns) {
-    const C = DATA.node_columns;
-    DATA.nodes = DATA.node_rows.map(r => {
-      const o = {};
-      for (let i = 0; i < C.length; i++) {
-        if (r[i] !== "" && r[i] !== null) o[C[i]] = r[i];
-      }
-      return o;
-    });
-    delete DATA.node_rows;
-  }
-  if (DATA.phri_rows) {
-    const P = DATA.phri_columns;
-    DATA.phri_rows.forEach((r, i) => {
-      for (let j = 0; j < P.length; j++) {
-        if (r[j] !== "") DATA.nodes[i][P[j]] = r[j];
-      }
-    });
-    delete DATA.phri_rows;
-  }
-
-  const hasPhri = window.PHRI ? PHRI.init(DATA) : false;
-  const PHRI_GROUP = (DATA.phri && DATA.phri.community_field) || "community";
-  DATA.edges = DATA.edges || [];
-
-  const PALETTE = [
-    "#2a6fdb", "#e0663a", "#2e9e6a", "#b347c6", "#d4a21b", "#1aa0b4",
-    "#d1477a", "#7a8a2e", "#8a5a3c", "#5b5fd6", "#3fae3a", "#c0392b"
-  ];
+  const PALETTE = ["#2a6fdb", "#e0663a", "#2e9e6a", "#b347c6", "#d4a21b", "#1aa0b4",
+                   "#d1477a", "#7a8a2e", "#8a5a3c", "#5b5fd6", "#3fae3a", "#c0392b"];
   const OTHER = "#9a9a94", ABSENT = "#cfcfc8";
-
-  // Cache CSS custom properties once at startup (never inside reducers)
-  const rootStyle = getComputedStyle(document.documentElement);
-  const css = n => rootStyle.getPropertyValue(n).trim();
-  const COLOR_TEXT = css("--text");
-  const COLOR_MUTED = css("--muted");
-  const COLOR_EDGE = css("--edge");
-  const COLOR_BORDER = css("--border");
-  const COLOR_EDGE_HI = css("--edge-hi");
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
   // ---------- build graph ----------
   const graph = new graphology.Graph({ type: "undirected", multi: false });
-  const totalNodes = DATA.nodes.length;
-  const commCounts = new Map();
-
   DATA.nodes.forEach((n, i) => {
-    const a = 2 * Math.PI * i / totalNodes;
-    commCounts.set(n.community, (commCounts.get(n.community) || 0) + 1);
+    const a = 2 * Math.PI * i / DATA.nodes.length;
     graph.addNode(n.id, Object.assign({}, n, {
-      label: n.id,
-      x: n.x ?? Math.cos(a),
-      y: n.y ?? Math.sin(a),
-      size: 6,
-      phriPass: true
+      label: n.id, x: n.x ?? Math.cos(a), y: n.y ?? Math.sin(a), size: 6
     }));
   });
-
   let maxD = 0;
-  const edgeDistCounts = new Map();
-
   DATA.edges.forEach(([s, t, d]) => {
-    if (typeof s === "number") { s = DATA.nodes[s].id; t = DATA.nodes[t].id; }
     if (s === t || graph.hasEdge(s, t)) return;
-    if (d > maxD) maxD = d;
-    edgeDistCounts.set(d, (edgeDistCounts.get(d) || 0) + 1);
-
-    const sameType = graph.getNodeAttribute(s, "pling_type") === graph.getNodeAttribute(t, "pling_type");
-    const baseSize = Math.max(0.6, 3.2 - 0.5 * d);
-    graph.addEdge(s, t, {
-      dist: d,
-      label: "DCJ " + d,
-      s,
-      t,
-      sameType,
-      size: baseSize
-    });
+    maxD = Math.max(maxD, d);
+    // Mark links that leave the community. The layout places each community
+    // in its own patch of canvas, so a cross-community link is drawn as a
+    // long line across unrelated blobs -- visually it reads as "these are
+    // near each other", which is exactly what the separated layout is trying
+    // not to say. They are real links and are kept, but drawn faintly and
+    // only brought forward when you hover or select an endpoint.
+    const cross = graph.getNodeAttribute(s, "community")
+               !== graph.getNodeAttribute(t, "community");
+    graph.addEdge(s, t, { dist: d, label: "DCJ " + d, cross });
+  });
+  let nCross = 0;
+  graph.forEachEdge((e, a) => { if (a.cross) nCross += 1; });
+  // Node size encodes PLASMID LENGTH, not how many neighbours it has.
+  // Degree is an artefact of the edge pruning and of how heavily a lineage
+  // happens to be sequenced; length is a property of the plasmid itself, and
+  // it is what separates a 5 kb cryptic replicon from a 300 kb megaplasmid at
+  // a glance. Cube root, because length spans three orders of magnitude and a
+  // linear scale makes everything either a dot or a blob.
+  const big = graph.order > 1000;
+  const lens = [];
+  graph.forEachNode((n, a) => { const L = +a.length_bp; if (L > 0) lens.push(L); });
+  const loMin = lens.length ? Math.min(...lens) : 1;
+  const loMax = lens.length ? Math.max(...lens) : 1;
+  const cbrt = v => Math.cbrt(Math.max(v, 1));
+  const cLo = cbrt(loMin), cHi = cbrt(loMax);
+  const sMin = big ? 1.6 : 3, sMax = big ? 9 : 16;
+  graph.forEachNode((n, a) => {
+    const L = +a.length_bp;
+    const t = (cHi > cLo && L > 0) ? (cbrt(L) - cLo) / (cHi - cLo) : 0.25;
+    graph.setNodeAttribute(n, "size", sMin + t * (sMax - sMin));
   });
 
-  const big = graph.order > 1000;
-  const TOPK = DATA.top_k || 0;
-  const hasLength = (DATA.metadata_columns || []).includes("length_bp");
-
-  function resize() {
-    const mode = document.getElementById("sizeBy").value;
-    const lo = big ? 1 : 3, span = big ? 1.3 : 5;
-    graph.forEachNode((n, a) => {
-      let v;
-      if (mode === "length" && hasLength && +a.length_bp > 0)
-        v = lo + span * Math.max(0, Math.min(3.3, Math.log10(+a.length_bp) - 3));
-      else if (mode === "relatives")
-        v = (big ? 2 : 4) + (big ? 0.8 : 2.2) * Math.sqrt(a.relatives ?? graph.degree(n));
-      else v = big ? 3 : 6;
-      graph.setNodeAttribute(n, "size", v);
-    });
-  }
-  if (!hasLength) {
-    document.getElementById("sizeBy").value = "relatives";
-    document.getElementById("sizeBy").options[0].disabled = true;
-  }
-  resize();
-
+  // layout: only computed here if the data file has no positions (fine up to a few thousand nodes)
   if (DATA.nodes.length && DATA.nodes[0].x === undefined) {
     const FA2 = graphologyLibrary.layoutForceAtlas2;
-    const settings = Object.assign(FA2.inferSettings(graph), {
-      gravity: 1.5,
-      scalingRatio: 8,
-      barnesHutOptimize: graph.order > 300,
-      barnesHutTheta: 0.6
-    });
+    const settings = Object.assign(FA2.inferSettings(graph), { gravity: 1.5, scalingRatio: 8 });
+    // lay out using only the edges inside the PLING threshold so communities separate
     const g2 = graph.copy();
     g2.filterEdges((e, a) => a.dist > 4).forEach(e => g2.dropEdge(e));
     g2.forEachEdge((e, a) => g2.setEdgeAttribute(e, "weight", 1 / (1 + a.dist)));
-    FA2.assign(g2, {
-      iterations: DATA.nodes.length > 2000 ? 200 : 500,
-      settings,
-      getEdgeWeight: "weight"
-    });
+    FA2.assign(g2, { iterations: DATA.nodes.length > 2000 ? 300 : 600, settings,
+                     getEdgeWeight: "weight" });
     g2.forEachNode((n, a) => graph.mergeNodeAttributes(n, { x: a.x, y: a.y }));
   }
 
   // ---------- colour options ----------
   const metaCols = DATA.metadata_columns || [];
-  const distinct = c => {
-    const s = new Set();
-    const limit = Math.min(3000, 0.5 * graph.order + 20);
-    const nodes = DATA.nodes;
-    for (let i = 0; i < nodes.length; i++) {
-      s.add(nodes[i][c]);
-      if (s.size > limit) return s.size;
-    }
-    return s.size;
-  };
   const colourable = ["community"].concat(metaCols.filter(c =>
-    !["accession", "length_bp", "amr_genes", "collection_date", "submission_date", "description"].includes(c) &&
-    distinct(c) <= Math.min(3000, 0.5 * graph.order + 20)));
-
+    !["accession", "length_bp", "amr_genes", "collection_date"].includes(c)));
   const colorBy = document.getElementById("colorBy");
-  const pretty = c => c.replace(/_/g, " ");
+  // Display names for columns whose raw key reads badly in the dropdown.
+  const LABEL_OVERRIDES = { is_hub: "hub", amr_tier: "AMR tier",
+                            amr_score: "AMR score", length_bp: "plasmid length",
+                            community_gap: "community gap" };
+  const pretty = c => LABEL_OVERRIDES[c] || c.replace(/_/g, " ");
   colourable.forEach(c => colorBy.add(new Option(pretty(c), c)));
-  colorBy.add(new Option("PLING subcommunity", "pling_type"));
-
-  const giant = Math.max(...commCounts.values()) > 0.5 * graph.order;
-  if (giant) colorBy.value = "pling_type";
-
-  const dateCol = metaCols.includes("collection_date") ? "collection_date"
-                : metaCols.includes("submission_date") ? "submission_date" : null;
-  if (dateCol) colorBy.add(new Option(dateCol === "collection_date" ? "collection year" : "submission year", "__year"));
-  if (hasPhri) colorBy.add(new Option("public health risk (PHRI)", "__phri"));
-
+  if (metaCols.includes("collection_date")) colorBy.add(new Option("collection year", "__year"));
   const hasAmr = metaCols.includes("amr_genes");
   const allGenes = new Map();
   if (hasAmr) {
@@ -298,169 +291,237 @@
     graph.forEachNode((n, a) => (a.amr_genes || "").split(";").filter(Boolean)
       .forEach(g => allGenes.set(g, (allGenes.get(g) || 0) + 1)));
     const geneSel = document.getElementById("gene");
-    const frag = document.createDocumentFragment();
     [...allGenes.entries()].sort((a, b) => b[1] - a[1])
-      .forEach(([g, k]) => frag.appendChild(new Option(`${g} (${k})`, g)));
-    geneSel.appendChild(frag);
+      .forEach(([g, k]) => geneSel.add(new Option(`${g} (${k})`, g)));
   }
 
-  const valueOf = (attrs, key, selectedGene) => {
-    if (key === "__year") return (attrs[dateCol] || "").slice(0, 4) || "unknown";
+  const valueOf = (attrs, key) => {
+    if (key === "__year") return (attrs.collection_date || "").slice(0, 4) || "unknown";
     if (key === "__anyamr") return (attrs.amr_genes || "").trim() ? "carries AMR genes" : "no AMR genes";
-    if (key === "__phri") return PHRI.bandLabel(attrs);
     if (key === "__gene") {
-      return (attrs.amr_genes || "").split(";").includes(selectedGene) ? "carries " + selectedGene : "does not";
+      const g = document.getElementById("gene").value;
+      return (attrs.amr_genes || "").split(";").includes(g) ? "carries " + g : "does not";
     }
-    return attrs[key] || "unknown";
+    // Booleans must be handled before the `|| "unknown"` fallback: `false` is
+    // falsy, so every "no" was being coloured and labelled "unknown" -- which
+    // made 5,806 plasmids that are definitely NOT a potential wave look like
+    // missing data. Same bug the detail panel had with `is_hub`.
+    const v = attrs[key];
+    if (v === true || v === "True") return "yes";
+    if (v === false || v === "False") return "no";
+    return v || "unknown";
   };
 
   let colourMap = new Map();
-  let renderer = null;
-
+  // Legend selection: clicking a legend row isolates that category. groupSel
+  // holds the chosen value ("__other" = everything below the legend cut-off);
+  // groupKey records which "Colour by" field it belongs to, so switching the
+  // dropdown drops a selection that no longer means anything.
+  let groupSel = null, groupKey = null, legendValues = [];
   function recolour() {
     const key = colorBy.value;
-    const selectedGene = key === "__gene" ? document.getElementById("gene").value : "";
+    if (groupKey !== key) { groupSel = null; groupKey = key; }
     document.getElementById("geneWrap").hidden = key !== "__gene";
     const counts = new Map();
-    graph.forEachNode((n, a) => {
-      const v = valueOf(a, key, selectedGene);
-      counts.set(v, (counts.get(v) || 0) + 1);
-    });
+    graph.forEachNode((n, a) => { const v = valueOf(a, key); counts.set(v, (counts.get(v) || 0) + 1); });
     let order = [...counts.entries()].sort((a, b) => b[1] - a[1]);
     if (key === "__year") order.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-    if (key === "__phri") {
-      const ord = PHRI.bandOrder();
-      order.sort((a, b) => ord.indexOf(a[0]) - ord.indexOf(b[0]));
-    }
     colourMap = new Map();
     if (key === "__anyamr") {
       colourMap.set("carries AMR genes", "#d1477a");
       colourMap.set("no AMR genes", ABSENT);
-    } else if (key === "__phri") {
-      colourMap = PHRI.bandColours();
-      colourMap.set("unknown", ABSENT);
     } else if (key === "__gene") {
-      colourMap.set("carries " + selectedGene, PALETTE[1]);
+      colourMap.set("carries " + document.getElementById("gene").value, PALETTE[1]);
       colourMap.set("does not", ABSENT);
     } else {
+      // communities: cycle the palette so neighbouring groups still differ; other fields: top groups only
       order.forEach(([v], i) => colourMap.set(v, v === "unknown" ? ABSENT :
-        (key === "community" || key === "pling_type" ? PALETTE[i % PALETTE.length] : (PALETTE[i] || OTHER))));
+        (key === "community" ? PALETTE[i % PALETTE.length] : (PALETTE[i] || OTHER))));
     }
-    graph.forEachNode((n, a) => graph.setNodeAttribute(n, "color", colourMap.get(valueOf(a, key, selectedGene)) || OTHER));
+    graph.forEachNode((n, a) => graph.setNodeAttribute(n, "color", colourMap.get(valueOf(a, key)) || OTHER));
     const legend = document.getElementById("legend");
     const shown = order.slice(0, PALETTE.length);
-    const title = key === "pling_type" ? "PLING subcommunity" : key === "__gene" ? "AMR gene" : key === "__anyamr" ? "AMR genes"
-      : key === "__phri" ? "public health risk (PHRI)"
-      : key === "__year" ? (dateCol === "collection_date" ? "collection year" : "submission year") : pretty(key);
-    const sizeNote = hasLength && document.getElementById("sizeBy").value === "length" ? " · dot size = plasmid length" : "";
-    legend.innerHTML = `<div style="color:var(--muted);margin-bottom:4px">${title}${sizeNote}</div>` +
-      shown.map(([v, k]) => `<div><span class="sw" style="background:${colourMap.get(v) || OTHER}"></span>${v} <span style="color:var(--muted)">(${k})</span></div>`).join("") +
-      (order.length > shown.length ? (key === "community" || key === "pling_type"
-        ? `<div style="color:var(--muted)">+ ${order.length - shown.length} smaller ${key === "community" ? "communities" : "subcommunities"}</div>`
-        : `<div><span class="sw" style="background:${OTHER}"></span>other (${order.length - shown.length} groups)</div>`) : "");
-    if (renderer) scheduleRefresh();
+    legendValues = shown.map(([v]) => v);
+    const title = key === "__gene" ? "AMR gene"
+                : key === "__anyamr" ? "AMR genes" : pretty(key.replace("__", ""));
+    const sel = v => groupSel === v ? " on" : "";
+    legend.innerHTML =
+      `<div class="hd"><span>${title}</span>${groupSel !== null
+        ? '<button class="clr" id="legendClear" type="button">clear</button>' : ""}</div>` +
+      shown.map(([v, k], i) =>
+        `<div class="row${sel(v)}" data-i="${i}" title="Click to select all ${k} plasmids in this group">` +
+        `<span class="sw" style="background:${colourMap.get(v) || OTHER}"></span>${v} ` +
+        `<span style="color:var(--muted)">(${k})</span></div>`).join("") +
+      (order.length > shown.length
+        ? `<div class="row${sel("__other")}" data-i="__other">` +
+          `<span class="sw" style="background:${OTHER}"></span>` +
+          (key === "community"
+            ? `+ ${order.length - shown.length} smaller communities`
+            : `other (${order.length - shown.length} groups)`) + `</div>`
+        : "");
+    renderer && renderer.refresh();
   }
+
+  // ---------- legend selection ----------
+  // "__other" means every value that did not make the legend's top slice, so
+  // the membership test is "not one of the listed ones" rather than equality.
+  const inGroup = (a) => groupSel === null ? false
+    : groupSel === "__other" ? !legendValues.includes(valueOf(a, colorBy.value))
+    : valueOf(a, colorBy.value) === groupSel;
+
+  function groupMembers() {
+    const out = [];
+    graph.forEachNode((n, a) => { if (inGroup(a)) out.push(n); });
+    return out;
+  }
+
+  function selectGroup(v) {
+    groupSel = (groupSel === v) ? null : v;   // clicking the same row clears it
+    if (groupSel !== null) { selected = null; hits = new Map(); setFocus(); }
+    recolour();
+    const ids = groupSel === null ? [] : groupMembers();
+    if (ids.length) {
+      // Frame the group so "select all of these" actually shows them.
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      ids.forEach(id => { const d = renderer.getNodeDisplayData(id); if (!d) return;
+        x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x);
+        y0 = Math.min(y0, d.y); y1 = Math.max(y1, d.y); });
+      if (x0 < Infinity) {
+        const pad = Math.max((x1 - x0), (y1 - y0), 0.02) * 0.6;
+        renderer.getCamera().animate(
+          { x: (x0 + x1) / 2, y: (y0 + y1) / 2, ratio: Math.max(pad, 0.02) },
+          { duration: 400 });
+      }
+    }
+    showInfo();
+  }
+
+  document.getElementById("legend").addEventListener("click", (e) => {
+    if (e.target.id === "legendClear") { selectGroup(groupSel); return; }
+    const row = e.target.closest(".row");
+    if (!row) return;
+    const i = row.dataset.i;
+    selectGroup(i === "__other" ? "__other" : legendValues[+i]);
+  });
 
   // ---------- renderer ----------
   const dcj = document.getElementById("dcj");
   dcj.max = Math.max(4, maxD);
   let threshold = +dcj.value, selected = null, hovered = null, showAll = false;
-  let minPhri = 0;
+  // Cross-community links are off by default: with a per-community layout
+  // they are long lines across unrelated blobs. The checkbox brings them back.
+  let showCross = false;
   let focus = new Set();
-  let hits = new Map();
-
-  function updatePhriFilter() {
-    if (!minPhri) {
-      graph.forEachNode(n => graph.setNodeAttribute(n, "phriPass", true));
-    } else {
-      graph.forEachNode((n, a) => graph.setNodeAttribute(n, "phriPass", PHRI.passesFilter(a, minPhri)));
-    }
-  }
+  let hits = new Map();        // PLSDB search hits shown in the graph: plasmid id -> hit (with rank)
 
   function setFocus() {
-    const n = selected || hovered;
+    const n = hovered || selected;
     focus = new Set();
     if (n) {
       focus.add(n);
-      graph.forEachNeighbor(n, m => {
-        if (graph.getEdgeAttribute(graph.edge(n, m), "dist") <= threshold) focus.add(m);
-      });
-    }
-    if (renderer) {
-      renderer.setSetting("renderEdgeLabels", Boolean(n));
+      graph.forEachNeighbor(n, (m) => { if (graph.getEdgeAttribute(graph.edge(n, m), "dist") <= threshold) focus.add(m); });
     }
   }
 
-  let rafId = 0;
-  function scheduleRefresh() {
-    if (rafId) return;
-    rafId = requestAnimationFrame(() => {
-      rafId = 0;
-      renderer.refresh();
-    });
-  }
-
-  recolour();
-
-  renderer = new Sigma(graph, document.getElementById("graph"), {
-    renderEdgeLabels: false,
-    labelRenderedSizeThreshold: graph.order > 1000 ? 14 : 9,
-    labelColor: { color: COLOR_TEXT },
-    edgeLabelColor: { color: COLOR_MUTED },
+  const renderer = new Sigma(graph, document.getElementById("graph"), {
+    renderEdgeLabels: true,
+    // Sigma draws a label on any node above this pixel size, which is why a
+    // couple of large plasmids showed their accession unprompted on the
+    // overview. Setting it beyond any node's rendered size means nothing is
+    // labelled automatically -- labels now come only from forceLabel, i.e.
+    // hover, selection, BLAST hits, or the "all labels" checkbox.
+    labelRenderedSizeThreshold: 10000,
+    labelColor: { color: css("--text") },
+    edgeLabelColor: { color: css("--muted") },
     edgeLabelSize: 11,
     labelSize: 12,
-    defaultEdgeColor: COLOR_EDGE,
+    defaultEdgeColor: css("--edge"),
     zIndex: true,
+    // big graphs: keep dots the same size on screen, so zooming in pulls close relatives apart
     zoomToSizeRatioFunction: big ? (() => 1) : Math.sqrt,
     nodeReducer: (n, a) => {
-      if (minPhri && n !== selected && !a.phriPass) {
-        return { hidden: true };
-      }
-      const center = selected || hovered;
+      const r = Object.assign({}, a);
       if (focus.size) {
-        if (focus.has(n)) {
-          return Object.assign({}, a, {
-            forceLabel: true,
-            zIndex: 2,
-            highlighted: n === center
-          });
-        }
-        return Object.assign({}, a, { color: COLOR_BORDER, label: "", zIndex: 0 });
-      }
-      if (hits.size) {
+        if (focus.has(n)) { r.forceLabel = true; r.zIndex = 2; if (n === (hovered || selected)) r.highlighted = true; }
+        else { r.color = css("--border"); r.label = ""; r.zIndex = 0; }
+      } else if (hits.size) {
         const h = hits.get(n);
-        if (h) {
-          return Object.assign({}, a, {
-            size: a.size + 3,
-            zIndex: 2,
-            highlighted: h.rank <= 3,
-            forceLabel: h.rank <= 10 || showAll
-          });
-        }
-        return Object.assign({}, a, { color: COLOR_BORDER, label: "", zIndex: 0 });
-      }
-      if (showAll) return Object.assign({}, a, { forceLabel: true });
-      return a;
+        if (h) { r.size = a.size + 3; r.zIndex = 2; r.highlighted = h.rank <= 3; if (h.rank <= 10 || showAll) r.forceLabel = true; }
+        else { r.color = css("--border"); r.label = ""; r.zIndex = 0; }
+      } else if (groupSel !== null) {
+        if (inGroup(a)) { r.zIndex = 2; if (showAll) r.forceLabel = true; }
+        else { r.color = css("--border"); r.label = ""; r.zIndex = 0; }
+      } else if (showAll) r.forceLabel = true;
+      return r;
     },
     edgeReducer: (e, a) => {
-      if (a.dist > threshold) return { hidden: true };
-      if (minPhri && (!graph.getNodeAttribute(a.s, "phriPass") || !graph.getNodeAttribute(a.t, "phriPass"))) {
-        return { hidden: true };
-      }
-      const center = selected || hovered;
+      const r = Object.assign({}, a);
+      if (a.dist > threshold) { r.hidden = true; return r; }
+      if (a.cross && !showCross) { r.hidden = true; return r; }
+      r.size = Math.max(0.6, 3.2 - 0.5 * a.dist);
+      if (a.cross) { r.size *= 0.5; r.color = css("--border"); r.zIndex = 0; }
+      const [s, t] = graph.extremities(e);
+      const center = hovered || selected;
       if (center) {
-        if (a.s === center || a.t === center) {
-          return Object.assign({}, a, { color: COLOR_EDGE_HI, forceLabel: true, zIndex: 2 });
-        }
-        return { hidden: true };
+        if (s === center || t === center) { r.color = css("--edge-hi"); r.forceLabel = true; r.zIndex = 2; }
+        else { r.hidden = true; }
+      } else {
+        r.label = "";
+        if (hits.size && !(hits.has(s) && hits.has(t))) r.hidden = true;  // with BLAST hits: only links among hits
+        // with a legend group selected: only links inside the group
+        if (groupSel !== null &&
+            !(inGroup(graph.getNodeAttributes(s)) && inGroup(graph.getNodeAttributes(t)))) r.hidden = true;
       }
-      if (giant && !hits.size && !a.sameType) return { hidden: true };
-      if (hits.size && !(hits.has(a.s) && hits.has(a.t))) return { hidden: true };
-      return a;
+      return r;
     }
   });
 
-  window.explorer = { graph, renderer };
+  recolour();
+
+  // Sigma's default camera fits the graph to the SHORTER viewport dimension,
+  // so a roughly square figure in a wide panel gets its left and right edges
+  // cropped -- whole communities sat off-screen until you zoomed out. Measure
+  // the rendered extent and back the zoom off until everything is inside.
+  function fitGraph(pad = 1.12) {
+    const cam = renderer.getCamera();
+    const dims = renderer.getDimensions();
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, rMax = 0;
+    graph.forEachNode((n, a) => {
+      const p = renderer.graphToViewport({ x: a.x, y: a.y });
+      if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+      if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y;
+      const d = renderer.getNodeDisplayData(n);
+      if (d && d.size > rMax) rMax = d.size;
+    });
+    // graphToViewport gives node CENTRES. Fitting those exactly leaves the
+    // outermost dots half-painted at the canvas edge -- the hub community
+    // rendered as a disc sliced down the middle until it was panned. Grow the
+    // box by the largest node radius before working out the zoom.
+    x0 -= rMax; x1 += rMax; y0 -= rMax; y1 += rMax;
+    const k = Math.max((x1 - x0) / dims.width, (y1 - y0) / dims.height) * pad;
+    if (!Number.isFinite(k) || k <= 0) return;
+    cam.setState({ ratio: cam.ratio * k });
+    // Sigma culls against an index built for the PREVIOUS camera. Zooming out
+    // without rebuilding it left every node that had been outside the old
+    // view unpainted -- the hub community showed up as a disc sliced cleanly
+    // down the middle. Force the re-indexation.
+    renderer.refresh({ skipIndexation: false });
+  }
+  // Deferred by two frames on purpose. Calling fitGraph() synchronously after
+  // the renderer is constructed changes the camera before Sigma's first paint
+  // has finished, and the result is a half-drawn frame that never corrects
+  // itself -- the largest community showed as a disc sliced down the middle
+  // until the user happened to pan. Letting the first render complete first
+  // makes the fit reliable.
+  requestAnimationFrame(() => requestAnimationFrame(() => fitGraph()));
+  // The panel and legend reflow on resize, so the fit has to be redone.
+  let fitTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(() => fitGraph(), 200);
+  });
+
+  window.explorer = { graph, renderer, fitGraph };
 
   // ---------- info panel ----------
   const info = document.getElementById("info");
@@ -468,34 +529,214 @@
   const defaultInfo = info.innerHTML;
 
   function summary() {
-    let shown = 0;
-    edgeDistCounts.forEach((count, dist) => { if (dist <= threshold) shown += count; });
+    const comps = new Set(); graph.forEachNode((n, a) => comps.add(a.community));
+    let shown = 0; graph.forEachEdge((e, a) => { if (a.dist <= threshold) shown++; });
     return `<h3>Dataset</h3><table>
-      <tr><td>Plasmids</td><td>${graph.order.toLocaleString()}</td></tr>
-      <tr><td>PLING communities</td><td>${commCounts.size.toLocaleString()}</td></tr>
-      <tr><td>Links shown</td><td>${shown.toLocaleString()} of ${graph.size.toLocaleString()} (DCJ ≤ ${threshold})</td></tr>
-      ${hasPhri ? PHRI.summaryRows() : ""}</table>
-      ${TOPK ? `<p class="hint">This view keeps each plasmid's ${TOPK} closest PLING links so it stays fast; the full count is shown per plasmid.</p>` : ""}`;
+      <tr><td>Plasmids</td><td>${graph.order}</td></tr>
+      <tr><td>PLING communities</td><td>${comps.size}</td></tr>
+      <tr><td>Links shown</td><td>${shown} of ${graph.size} (DCJ ≤ ${threshold})</td></tr></table>`;
+  }
+
+  // ---------- risk verdict + score bars ----------
+  //
+  // The verdict is a BAND, not a precise number: "High concern" is honest in
+  // a way that "73.4 / 100" is not, given the scores rest on a hand-written
+  // weight table and PLSDB's sampling. The three component bars stay on
+  // screen right below it, so nobody has to take the single word on trust.
+  //
+  // Bands are deliberately wide and the thresholds live here, in one place,
+  // so they are easy to argue with and easy to change.
+  const BANDS = [
+    { max: 30,  cls: "v-low",    label: "Low concern",
+      sub: "Little cargo, limited spread potential" },
+    { max: 55,  cls: "v-mod",    label: "Monitor",
+      sub: "Moderate on at least one axis" },
+    { max: 75,  cls: "v-high",   label: "Concerning",
+      sub: "Strong on several axes" },
+    { max: 101, cls: "v-severe", label: "High concern",
+      sub: "Loaded cargo in a capable, widely sampled vehicle" },
+  ];
+
+  // One colour for all three bars. Three different hues implied the axes
+  // were different KINDS of thing; they are three readings on the same 0-100
+  // scale, and the length of the bar is the only variable that should carry
+  // meaning. Colour here is decoration, so it stays constant.
+  const BAR_COLOUR = "#eb6834";
+  const BAR_NAMES = { amr_score: "AMR cargo", mobility_score: "Mobility",
+                      spread_score: "Spread" };
+
+  // Weights deliberately unequal -- spread is lineage-level context, shared
+  // by every member and heavily shaped by sampling bias, so it does not get
+  // to carry a third of the verdict. Must match export_graph.py.
+  const WEIGHTS = { amr_score: 0.45, mobility_score: 0.35, spread_score: 0.20 };
+
+  function overallOf(a) {
+    const pairs = Object.entries(WEIGHTS)
+      .map(([k, w]) => [+a[k], w]).filter(([v]) => Number.isFinite(v));
+    if (!pairs.length) return null;
+    let s = pairs.reduce((t, [v, w]) => t + v * w, 0)
+          / pairs.reduce((t, [, w]) => t + w, 0);
+    // The community gap is a rare-event flag, so it escalates rather than
+    // averaging: a clean plasmid whose lineage carries a carbapenemase should
+    // not be diluted back down to "normal" by its own low AMR score.
+    if (a.potential_wave) s = Math.min(100, s + 15);
+    return s;
+  }
+
+  function bandOf(score) {
+    return BANDS.find(b => score < b.max) || BANDS[BANDS.length - 1];
+  }
+
+  function riskPanel(a) {
+    const overall = overallOf(a);
+    if (overall === null) return "";
+    const b = bandOf(overall);
+    const bars = ["amr_score", "mobility_score", "spread_score"].map(k => {
+      const v = +a[k];
+      if (!Number.isFinite(v)) return "";
+      return `<div class="bar"><span class="nm">${BAR_NAMES[k]}</span>
+        <span class="track"><span class="fill" style="width:${Math.max(2, v)}%;
+          background:${BAR_COLOUR}"></span></span>
+        <span class="val">${v.toFixed(0)}</span></div>`;
+    }).join("");
+    const gun = a.potential_wave
+      ? `<p class="hint" style="margin:6px 0 0"><span class="gun">potential wave</span>
+         its lineage has been found carrying worse resistance than this plasmid
+         does${a.community_gap ? ` (gap ${(+a.community_gap).toFixed(2)})` : ""}</p>`
+      : "";
+    return `<div class="verdict ${b.cls}">
+        <span class="dot"></span>
+        <span><span class="label">${b.label}</span><br>
+        <span class="sub">${b.sub} · overall ${overall.toFixed(0)}/100</span></span>
+      </div>
+      <div class="bars">${bars}</div>${gun}`;
+  }
+
+  const COMMS = DATA.communities || {};
+
+  function epiPanel(a) {
+    // Everything here describes the COMMUNITY, not the plasmid. It is the
+    // part of the answer that says "and here is what its relatives tell
+    // you", which is the whole premise of the tool.
+    const c = COMMS[a.community];
+    if (!c) return "";
+    const rows = [];
+
+    rows.push(["Members",
+      `<span class="big">${c.members.toLocaleString()}</span>
+       <span class="sub">plasmids in this lineage${
+         c.reachable && c.reachable !== c.members
+           ? `, ${c.reachable.toLocaleString()} of them shown here`
+           : ""}</span>`]);
+
+    if (c.n_countries) {
+      rows.push(["Countries",
+        `<span class="big">${c.n_countries}</span>
+         <span class="sub">${c.countries.map(esc).join(", ")}${
+           c.n_countries > c.countries.length ? ", …" : ""}</span>`]);
+    }
+
+    if (c.n_host_genera) {
+      // Show species underneath the genus count: for a Klebsiella-only tool
+      // "1 genus" alone says nothing, but "1 genus, 8 species" does.
+      const sp = c.n_host_species
+        ? `${c.n_host_species} species: ${c.host_species.map(esc).join(", ")}${
+            c.n_host_species > c.host_species.length ? ", …" : ""}`
+        : c.host_genera.map(esc).join(", ");
+      rows.push(["Host range",
+        `<span class="big">${c.n_host_genera} ${
+          c.n_host_genera === 1 ? "genus" : "genera"}</span>
+         <span class="sub">${sp}</span>`]);
+    }
+
+    if (c.year_min && c.year_max) {
+      const span = c.year_max - c.year_min;
+      rows.push(["Years",
+        `<span class="big">${c.year_min}–${c.year_max}</span>
+         <span class="sub">${c.n_years} distinct year${c.n_years === 1 ? "" : "s"}${
+           span ? `, spanning ${span}` : ""}</span>`]);
+    } else {
+      rows.push(["Years", `<span class="sub">no dates recorded</span>`]);
+    }
+
+    // The honesty bar. A community at 30% is one whose figures above should
+    // not be leaned on, and the colour says so without a paragraph.
+    const pct = c.metadata_pct || 0;
+    const cls = pct >= 70 ? "" : (pct >= 40 ? "low" : "vlow");
+    rows.push(["Metadata<br>complete",
+      `<span class="big">${pct}%</span>
+       <div class="meter ${cls}"><span style="width:${Math.max(2, pct)}%"></span></div>
+       ${pct < 40 ? '<span class="sub">treat the figures above with caution</span>' : ""}`]);
+
+    if (c.crosses_genera) {
+      rows.push(["", `<span class="chip">crosses host genera</span>`]);
+    }
+
+    return `<div class="epi-h">Community epidemiology</div>
+            <div class="epi">${rows.map(([k, v]) =>
+              `<span class="k">${k}</span><span class="v">${v}</span>`).join("")}</div>`;
+  }
+
+  // Panel for a legend group: what the whole category looks like, and a way
+  // into its members. Medians, not means -- these distributions are skewed.
+  function showGroupPanel() {
+    const ids = groupMembers();
+    const med = (k) => {
+      const xs = ids.map(i => +graph.getNodeAttribute(i, k)).filter(v => v === v).sort((a, b) => a - b);
+      return xs.length ? Math.round(xs[Math.floor(xs.length / 2)]) : null;
+    };
+    const count = (f) => ids.filter(i => f(graph.getNodeAttributes(i))).length;
+    const label = groupSel === "__other" ? "everything else" : groupSel;
+    const bars = [["AMR cargo", med("amr_score")], ["Mobility", med("mobility_score")],
+                  ["Spread", med("spread_score")]]
+      .filter(([, v]) => v !== null)
+      .map(([t, v]) => `<div class="bar"><span class="nm">${t}</span>` +
+        `<span class="track"><span class="fill" style="width:${Math.max(2, v)}%;` +
+        `background:${BAR_COLOUR}"></span></span><span class="val">${v}</span></div>`).join("");
+    const withAmr = count(a => a.amr_genes && String(a.amr_genes).length);
+    const flagged = count(a => a.potential_wave === true || a.potential_wave === "True");
+    info.innerHTML =
+      `<h2>${esc(String(label))}</h2>` +
+      `<p class="hint">${ids.length.toLocaleString()} plasmid${ids.length === 1 ? "" : "s"} ` +
+      `selected · median values across the group</p><div class="bars">${bars}</div>` +
+      `<table><tr><th>carrying AMR genes</th><td>${withAmr.toLocaleString()} ` +
+      `(${ids.length ? Math.round(100 * withAmr / ids.length) : 0}%)</td></tr>` +
+      `<tr><th>potential wave flag</th><td>${flagged.toLocaleString()}</td></tr></table>` +
+      `<h3>Members</h3><div id="member-list">` +
+      ids.slice(0, 400).map(i => `<a href="#" data-id="${esc(i)}">${esc(i)}</a>`).join("") +
+      (ids.length > 400 ? `<p class="hint">+ ${(ids.length - 400).toLocaleString()} more</p>` : "") +
+      `</div><p><button class="btn ghost" id="clearGroup" type="button">← Clear selection</button></p>`;
+    // #summary lives inside defaultInfo, so it is gone the moment info.innerHTML
+    // is replaced above. Querying it unguarded threw on every group click.
+    info.querySelectorAll("#member-list a").forEach(el => el.onclick = (e) => {
+      e.preventDefault(); select(el.dataset.id, true);
+    });
+    document.getElementById("clearGroup").onclick = () => selectGroup(groupSel);
   }
 
   function showInfo(n) {
     if (!n) {
       if (hits.size) { showHitsPanel(); return; }
-      info.innerHTML = defaultInfo;
-      document.getElementById("summary").innerHTML = summary();
-      return;
+      if (groupSel !== null) { showGroupPanel(); return; }
+      info.innerHTML = defaultInfo; document.getElementById("summary").innerHTML = summary(); return;
     }
     const a = graph.getNodeAttributes(n);
     const rows = [["PLING type", a.pling_type + (a.hub ? ' <span class="chip">hub plasmid</span>' : "")]];
-    if (a.relatives !== undefined) rows.push(["PLING relatives", `${a.relatives.toLocaleString()} with DCJ ≤ 4`]);
-    if (hits.has(n)) {
-      const h = hits.get(n);
-      rows.unshift(["PLSDB hit", `<span class="chip">#${h.rank}</span> ${h.identity}% identity, ${h.query_cover}% coverage`]);
-    }
+    // The three scores are drawn as bars above the table, so keep them out of
+    // the key/value rows to avoid showing every number twice.
+    const SCORE_KEYS = ["amr_score", "mobility_score", "spread_score",
+                        "ecology_score", "overall_score", "verdict",
+                        "community_gap", "potential_wave"];
+    if (hits.has(n)) { const h = hits.get(n);
+      rows.unshift(["BLAST hit", `<span class="chip">#${h.rank}</span> ${h.identity}% identity, ${h.query_cover}% query cover`]); }
     metaCols.forEach(c => {
+      if (SCORE_KEYS.includes(c)) return;
       let v = a[c] ?? "";
       if (c === "amr_genes") v = v ? v.split(";").map(g => `<span class="chip">${esc(g)}</span>`).join("") : '<span class="hint">none detected</span>';
       else if (c === "length_bp" && v) v = (+v).toLocaleString() + " bp";
+      // Booleans must be handled before the `|| "unknown"` fallback, or
+      // `false` is falsy and every "no" renders as "unknown".
+      else if (typeof v === "boolean") v = v ? "yes" : "no";
       else v = esc(v || "unknown");
       rows.push([pretty(c), v]);
     });
@@ -503,18 +744,16 @@
       .sort((x, y) => x.d - y.d);
     const within = nbs.filter(x => x.d <= threshold);
     info.innerHTML = `<h2>${esc(n)}</h2>
-      ${hasPhri ? PHRI.panelHTML(a) : ""}
-      ${hasPhri ? "<h3>Plasmid</h3>" : ""}
+      ${riskPanel(a)}
       <table>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</table>
-      ${hasPhri ? PHRI.communityHTML(a[PHRI_GROUP]) : ""}
+      ${epiPanel(a)}
       <h3>Related plasmids, DCJ ≤ ${threshold} (${within.length})</h3>
       ${within.length ? `<ul class="nb">${within.map(x => {
         const b = graph.getNodeAttributes(x.m);
-        return `<li data-id="${esc(x.m)}"><span>${hasPhri ? PHRI.chip(b) + " " : ""}${esc(x.m)}<br><span class="hint" style="font-size:12px">${esc(b.host || "")}${b.country ? " · " + esc(b.country) : ""}${dateCol && b[dateCol] ? " · " + esc(String(b[dateCol]).slice(0, 4)) : ""}</span></span><span class="d">DCJ ${x.d}</span></li>`;
+        return `<li data-id="${esc(x.m)}"><span>${esc(x.m)}<br><span class="hint" style="font-size:12px">${esc(b.host || "")}${b.country ? " · " + esc(b.country) : ""}${b.collection_date ? " · " + esc(b.collection_date.slice(0, 4)) : ""}</span></span><span class="d">DCJ ${x.d}</span></li>`;
       }).join("")}</ul>` : '<p class="hint">None within this distance. Raise the Max DCJ distance slider to see more distant relatives.</p>'}
-      ${nbs.length > within.length ? `<p class="hint">${nbs.length - within.length} more at larger distances are hidden.</p>` : ""}
-      ${TOPK && a.relatives > nbs.length ? `<p class="hint">To keep this view fast, each plasmid shows only its ${TOPK} closest relatives plus any that list it among theirs (${nbs.length} of ${a.relatives.toLocaleString()} here).</p>` : ""}`;
-    if (hits.size) info.insertAdjacentHTML("beforeend", '<p><button class="btn ghost" id="backHits" type="button">← Back to PLSDB hits</button></p>');
+      ${nbs.length > within.length ? `<p class="hint">${nbs.length - within.length} more at larger distances are hidden.</p>` : ""}`;
+    if (hits.size) info.insertAdjacentHTML("beforeend", '<p><button class="btn ghost" id="backHits" type="button">← Back to BLAST hits</button></p>');
     const back = document.getElementById("backHits"); if (back) back.onclick = () => select(null);
     info.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id, true));
   }
@@ -539,7 +778,7 @@
       <p><button class="btn ghost" id="clearHits" type="button">Clear PLSDB hits</button>
          <button class="btn ghost" id="reopenBlast" type="button">Results table</button></p>
       <ul class="nb">${list.map(h => `<li data-id="${esc(h.plasmid)}"><span><span class="chip">#${h.rank}</span> ${esc(h.plasmid)}<br>
-        <span class="hint" style="font-size:12px">${esc(graph.getNodeAttribute(h.plasmid, "host") || h.host || "")} · ${esc(graph.getNodeAttribute(h.plasmid, giant ? "pling_type" : "community") || "")}</span></span>
+        <span class="hint" style="font-size:12px">${esc(graph.getNodeAttribute(h.plasmid, "host") || h.host || "")} · ${esc(graph.getNodeAttribute(h.plasmid, "community") || "")}</span></span>
         <span class="d">${h.identity}% · ${h.query_cover}%</span></li>`).join("")}</ul>`;
     $("clearHits").onclick = () => { hits = new Map(); select(null); };
     $("reopenBlast").onclick = openBlast;
@@ -595,7 +834,7 @@
         <th>${isMash ? "P-value" : "E-value"}</th>
         <th>${isMash ? "Mash dist" : "Bit score"}</th>
         <th>Length</th><th>Host</th><th>Country</th><th>Year</th>
-        <th>${giant ? "PLING subcommunity" : "PLING community"}</th>
+        <th>${"PLING community"}</th>
       </tr></thead><tbody>
       ${res.hits.map((h, i) => {
         const a = g(h.plasmid);
@@ -607,8 +846,8 @@
           <td class="num">${(h.subject_length || (a && +a.length_bp) || 0).toLocaleString()}</td>
           <td>${esc(a ? a.host || "" : h.host || "")}</td>
           <td>${esc(a ? a.country || "" : h.country || "")}</td>
-          <td>${esc(a ? (a[dateCol] || "").slice(0, 4) : "")}</td>
-          <td>${a ? esc(giant ? a.pling_type : a.community) : '<span class="hint">not in graph</span>'}</td></tr>`;
+          <td>${esc(a ? (a.collection_date || "").slice(0, 4) : "")}</td>
+          <td>${a ? esc(a.community) : '<span class="hint">not in graph</span>'}</td></tr>`;
       }).join("")}
       </tbody></table>`;
     $("showHits").onclick = e => {
@@ -913,7 +1152,11 @@
   $("blastBtn").onclick = openBlast;
   $("blastClose").onclick = () => { $("blastModal").hidden = true; };
   $("blastModal").onclick = e => { if (e.target.id === "blastModal") $("blastModal").hidden = true; };
-  document.addEventListener("keydown", e => { if (e.key === "Escape") $("blastModal").hidden = true; });
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    if (!$("blastModal").hidden) { $("blastModal").hidden = true; return; }
+    if (groupSel !== null) selectGroup(groupSel);     // second Escape clears the legend group
+  });
   $("blastRun").onclick = runBlast;
   $("blastFile").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
@@ -931,108 +1174,40 @@
   })();
 
   function select(n, move) {
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = 0;
-    }
-    selected = (n && graph.hasNode(n)) ? n : null;
-    hovered = null;
-
-    setFocus();
-    showInfo(selected);
-    // Run refresh synchronously so display coordinates are ready before camera animation
-    renderer.refresh();
-
-    if (selected && move) {
-      const p = renderer.getNodeDisplayData(selected);
-      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
-
+    selected = n; setFocus(); showInfo(n); renderer.refresh();
+    if (n && move) {
+      // centre on the plasmid and zoom so its related plasmids fit on screen
+      const p = renderer.getNodeDisplayData(n);
       let span = 0;
-      focus.forEach(m => {
-        const q = renderer.getNodeDisplayData(m);
-        if (q && Number.isFinite(q.x) && Number.isFinite(q.y)) {
-          span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y));
-        }
-      });
-
-      const ratio = focus.size > 1
-        ? Math.min(1, Math.max(0.12, span * 3))
-        : (big ? 0.12 : 0.5);
-
-      renderer.getCamera().animate(
-        { x: p.x, y: p.y, ratio },
-        { duration: 500 }
-      );
+      focus.forEach(m => { const q = renderer.getNodeDisplayData(m);
+        span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y)); });
+      const ratio = Math.min(1, Math.max(0.01, span * 3));
+      renderer.getCamera().animate({ x: p.x, y: p.y, ratio }, { duration: 500 });
     }
   }
 
   renderer.on("clickNode", ({ node }) => select(node, false));
   renderer.on("clickStage", () => select(null));
-  renderer.on("enterNode", ({ node }) => {
-    hovered = node; setFocus(); scheduleRefresh(); document.body.style.cursor = "pointer";
-  });
-  renderer.on("leaveNode", () => {
-    hovered = null; setFocus(); scheduleRefresh(); document.body.style.cursor = "";
-  });
+  renderer.on("enterNode", ({ node }) => { hovered = node; setFocus(); renderer.refresh(); document.body.style.cursor = "pointer"; });
+  renderer.on("leaveNode", () => { hovered = null; setFocus(); renderer.refresh(); document.body.style.cursor = ""; });
 
   // ---------- controls ----------
   colorBy.onchange = recolour;
-  document.getElementById("sizeBy").onchange = () => { resize(); recolour(); };
   document.getElementById("gene").onchange = recolour;
   dcj.oninput = () => {
-    threshold = +dcj.value;
-    document.getElementById("dcjVal").textContent = threshold;
-    setFocus();
-    showInfo(selected);
-    scheduleRefresh();
+    threshold = +dcj.value; document.getElementById("dcjVal").textContent = threshold;
+    setFocus(); showInfo(selected); renderer.refresh();
   };
-  if (hasPhri) {
-    document.getElementById("phriWrap").hidden = false;
-    document.getElementById("minPhri").oninput = e => {
-      minPhri = +e.target.value;
-      document.getElementById("minPhriVal").textContent = minPhri;
-      updatePhriFilter();
-      scheduleRefresh();
-    };
-  }
-  document.getElementById("labels").onchange = e => { showAll = e.target.checked; scheduleRefresh(); };
+  document.getElementById("labels").onchange = e => { showAll = e.target.checked; renderer.refresh(); };
+  document.getElementById("crossEdges").onchange = e => { showCross = e.target.checked; renderer.refresh(); };
 
-  // Lazy-populate <datalist> on input (max 50 matches) to prevent DOM bloat
-  const dl = document.getElementById("plasmid-list");
-  const searchInput = document.getElementById("search");
-  const byAcc = new Map();
-  const searchIndex = [];
-
+  const dl = document.getElementById("plasmid-list"), byAcc = new Map();
   graph.forEachNode((n, a) => {
-    const acc = a.accession ? String(a.accession) : "";
-    if (acc) byAcc.set(acc.toLowerCase(), n);
-    searchIndex.push({
-      id: n,
-      idLower: n.toLowerCase(),
-      accLower: acc.toLowerCase(),
-      label: acc ? `${n} (${acc})` : n
-    });
+    dl.appendChild(new Option(a.accession ? `${n} (${a.accession})` : n, n));
+    if (a.accession) byAcc.set(a.accession.toLowerCase(), n);
   });
-
-  searchInput.addEventListener("input", e => {
-    const ql = e.target.value.trim().toLowerCase();
-    dl.innerHTML = "";
-    if (ql.length < 2) return;
-    const frag = document.createDocumentFragment();
-    let count = 0;
-    for (let i = 0; i < searchIndex.length && count < 50; i++) {
-      const item = searchIndex[i];
-      if (item.idLower.includes(ql) || item.accLower.includes(ql)) {
-        frag.appendChild(new Option(item.label, item.id));
-        count++;
-      }
-    }
-    dl.appendChild(frag);
-  });
-
-  searchInput.onchange = e => {
+  document.getElementById("search").onchange = e => {
     const q = e.target.value.trim(), ql = q.toLowerCase();
-    if (!q) return;
     const hit = graph.hasNode(q) ? q : byAcc.get(ql) || graph.findNode(n => n.toLowerCase().includes(ql));
     if (hit) select(hit, true);
   };
