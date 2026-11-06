@@ -151,7 +151,7 @@ python3 -m http.server 8000
 2. Set the root directory to `wesbite/`.
 3. Deploy. `api/plsdb.js` becomes the `/api/plsdb` endpoint automatically.
 
-**Rebuild the data.** The scoring and graph-export pipeline (`score_klebsiella.py`, `export_graph.py`) takes the PLSDB tables, PLING output, MOB-suite and AMRFinder results. See `docs/METHODS.md`. [Add the scripts here, or a link to where they live.]
+**Rebuild the data.** The scoring and graph-export pipeline (`score_klebsiella.py`, `export_graph.py`) takes the PLSDB tables, PLING output, MOB-suite and AMRFinder results. See `docs/METHODS.md`.
 
 ---
 
