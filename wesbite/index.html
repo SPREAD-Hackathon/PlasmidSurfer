@@ -132,6 +132,25 @@
   #worldSvg .n { font: 600 14px system-ui, sans-serif; fill: #0b3d34; text-anchor: middle; pointer-events: none; }
   #mapList { flex: 0 1 280px; max-height: 460px; overflow: auto; font-size: 13px; }
   #mapList li { cursor: pointer; }
+  #timeModal .dialog { width: min(1100px, 96vw); }
+  .tl-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0 4px; font-size: 13px; }
+  .tl-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .tl-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .tl-wrap { position: relative; }
+  #timeSvg { width: 100%; height: auto; display: block; }
+  #timeSvg .grid { stroke: #ececea; stroke-width: 1; }
+  #timeSvg .ax { font: 11px system-ui, sans-serif; fill: var(--muted); }
+  #timeSvg rect.seg { stroke: var(--panel); stroke-width: 1.5; }
+  #timeSvg rect.seg.dim { opacity: .25; }
+  #timeSvg rect.hit { fill: transparent; cursor: default; }
+  .tl-tip { position: absolute; pointer-events: none; background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.12); padding: 8px 10px; font-size: 12px; line-height: 1.45; min-width: 170px; }
+  .tl-tip b { font-size: 13px; } .tl-tip .r { display: flex; gap: 8px; justify-content: space-between; }
+  .tl-tip i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 5px; }
+  details.tl-table { margin-top: 8px; font-size: 12px; } details.tl-table table { border-collapse: collapse; }
+  details.tl-table td, details.tl-table th { padding: 2px 8px; border-bottom: 1px solid var(--border); text-align: right; }
+  details.tl-table th:first-child, details.tl-table td:first-child { text-align: left; }
+  .mapbtn { padding: 2px 10px; font-size: 12px; margin-left: 8px; vertical-align: middle; }
   .dialog .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
   #blastSeq { width: 100%; height: 150px; margin-top: 12px; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
               resize: vertical; }
@@ -225,11 +244,24 @@
   </div>
 </div>
 
+<div id="timeModal" class="modal" hidden>
+  <div class="dialog" role="dialog" aria-labelledby="timeTitle">
+    <button class="x" id="timeClose" aria-label="Close">×</button>
+    <h2 id="timeTitle">Plasmids per year by host species</h2>
+    <p class="hint" id="timeHint" style="margin:0"></p>
+    <div class="tl-legend" id="timeLegend"></div>
+    <div class="tl-wrap"><svg id="timeSvg" role="img" aria-label="Stacked bar chart of plasmids per year, coloured by host species"></svg><div class="tl-tip" id="timeTip" hidden></div></div>
+    <details class="tl-table"><summary>Show as table</summary><div id="timeTable" style="overflow:auto;max-height:260px"></div></details>
+  </div>
+</div>
+
 <script src="lib/graphology.umd.min.js"></script>
 <script src="lib/graphology-library.min.js"></script>
 <script src="lib/sigma.min.js"></script>
 <script src="data.js"></script>
-<script src="world.js"></script><!-- world outline + country centres for the hits map -->
+<script src="world.js"></script>
+<script src="community_countries.js"></script>
+<script src="community_timeline.js"></script><!-- per-year, per-species counts for each whole community --><!-- per-country counts for each whole community --><!-- world outline + country centres for the hits map -->
 <script>
 (function () {
   const DATA = window.PLASMID_GRAPH;
@@ -655,7 +687,8 @@
 
     if (c.n_countries) {
       rows.push(["Countries",
-        `<span class="big">${c.n_countries}</span>
+        `<span class="big">${c.n_countries}</span>${window.COMMUNITY_COUNTRIES && window.COMMUNITY_COUNTRIES[a.community]
+           ? ` <button class="btn ghost mapbtn" type="button" data-comm="${esc(a.community)}">Show on map</button>` : ""}
          <span class="sub">${c.countries.map(esc).join(", ")}${
            c.n_countries > c.countries.length ? ", …" : ""}</span>`]);
     }
@@ -676,7 +709,8 @@
     if (c.year_min && c.year_max) {
       const span = c.year_max - c.year_min;
       rows.push(["Years",
-        `<span class="big">${c.year_min}–${c.year_max}</span>
+        `<span class="big">${c.year_min}–${c.year_max}</span>${window.COMMUNITY_TIMELINE && window.COMMUNITY_TIMELINE[a.community]
+           ? ` <button class="btn ghost timebtn mapbtn" type="button" data-comm="${esc(a.community)}">Show timeline</button>` : ""}
          <span class="sub">${c.n_years} distinct year${c.n_years === 1 ? "" : "s"}${
            span ? `, spanning ${span}` : ""}</span>`]);
     } else {
@@ -1184,58 +1218,149 @@
     }
   }
 
-  // ---------- WORLD MAP OF HITS ----------
+  // ---------- WORLD MAPS (search hits, or a whole PLING community) ----------
   // One dot per country, at the centre of its largest landmass. Dot AREA is
-  // proportional to the number of hits from that country (so the eye reads it
-  // as a count). Country comes from the graph metadata, else from PLSDB's reply.
+  // proportional to the number of plasmids from that country.
   const SVGNS = "http://www.w3.org/2000/svg";
-  let mapCountry = null;
-  function hitCountry(h) {
-    const a = h.in_graph && graph.hasNode(h.plasmid) ? graph.getNodeAttributes(h.plasmid) : null;
-    return String((a && a.country) || h.country || "").trim();
-  }
-  function showHitsMap() {
-    if (!lastResult || !window.WORLD_MAP) return;
+  const COUNTRY_NORM = { "Hong Kong": "China", "US": "USA", "Czechia": "Czech Republic", "The Gambia": "Gambia" };
+  const normCountry = c => { c = String(c || "").trim(); return COUNTRY_NORM[c] || c; };
+  const plural = (n, w, ws) => `${n.toLocaleString()} ${n === 1 ? w : (ws || w + "s")}`;
+  let mapView = null;   // { title, counts: [[country, n]], noCountry, what, onCountry }
+
+  function drawMap(view) {
+    if (!window.WORLD_MAP) return;
+    mapView = view;
     const W = window.WORLD_MAP, svg = $("worldSvg");
-    const list = shownHits(lastResult).map((h, i) => Object.assign({ rank: i + 1 }, h));
-    const by = new Map(); let unknown = 0, unplaced = [];
-    list.forEach(h => { const c = hitCountry(h);
-      if (!c) { unknown++; return; }
-      if (!W.centres[c]) { unplaced.push(c); return; }
-      if (!by.has(c)) by.set(c, []); by.get(c).push(h); });
-    const max = Math.max(1, ...[...by.values()].map(v => v.length));
+    const placed = view.counts.filter(([c]) => W.centres[c]).sort((a, b) => b[1] - a[1]);
+    const offMap = view.counts.filter(([c]) => !W.centres[c]);
+    const total = view.counts.reduce((t, [, n]) => t + n, 0) + view.noCountry;
+    const max = Math.max(1, ...placed.map(([, n]) => n));
     svg.innerHTML = `<path class="land" d="${W.path}"></path>`;
-    [...by.entries()].sort((a, b) => b[1].length - a[1].length).forEach(([c, hs]) => {
-      const [x, y] = W.centres[c], r = 6 + 34 * Math.sqrt(hs.length / max);
+    placed.forEach(([c, n]) => {
+      const [x, y] = W.centres[c], r = 6 + 34 * Math.sqrt(n / max);
       const g = document.createElementNS(SVGNS, "g");
-      g.innerHTML = `<circle class="dot" cx="${x}" cy="${y}" r="${r}"><title>${esc(c)}: ${hs.length} hit${hs.length > 1 ? "s" : ""}</title></circle>` +
-        (r >= 11 ? `<text class="n" x="${x}" y="${y + 5}">${hs.length}</text>` : "");
-      g.querySelector("circle").onclick = () => mapListCountry(c, hs);
+      g.innerHTML = `<circle class="dot" cx="${x}" cy="${y}" r="${r}"><title>${esc(c)}: ${plural(n, view.what)}</title></circle>` +
+        (r >= 11 ? `<text class="n" x="${x}" y="${y + 5}">${n}</text>` : "");
+      g.querySelector("circle").onclick = () => countryDetail(c);
       g.dataset.c = c; svg.appendChild(g);
     });
-    const placed = list.length - unknown - unplaced.length;
-    $("mapHint").textContent = `${placed} of ${list.length} hits placed in ${by.size} countr${by.size === 1 ? "y" : "ies"}` +
-      (unknown ? ` · ${unknown} with no country recorded` : "") +
-      (unplaced.length ? ` · ${unplaced.length} with a country name not on the map (${[...new Set(unplaced)].join(", ")})` : "") +
-      ". Dot area = number of hits. Click a dot to list its plasmids.";
-    mapCountry = null;
-    $("mapList").innerHTML = `<p class="hint">Countries, most hits first:</p><ul class="nb">${[...by.entries()].sort((a, b) => b[1].length - a[1].length)
-      .map(([c, hs]) => `<li data-c="${esc(c)}"><span>${esc(c)}</span><span class="d">${hs.length}</span></li>`).join("")}</ul>`;
-    $("mapList").querySelectorAll("li[data-c]").forEach(li => li.onclick = () => mapListCountry(li.dataset.c, by.get(li.dataset.c)));
+    $("mapTitle").textContent = view.title;
+    const nPlaced = placed.reduce((t, [, n]) => t + n, 0);
+    $("mapHint").textContent = `${nPlaced.toLocaleString()} of ${plural(total, view.what)} placed in ${plural(placed.length, "country", "countries")}` +
+      (view.noCountry ? ` · ${view.noCountry.toLocaleString()} with no country recorded` : "") +
+      (offMap.length ? ` · not on the map: ${offMap.map(([c, n]) => `${c} (${n})`).join(", ")}` : "") +
+      `. Dot area = number of ${view.what}s.` + (view.note ? " " + view.note : "") + " Click a dot for details.";
+    $("mapList").innerHTML = `<p class="hint">Countries, most ${view.what}s first:</p><ul class="nb">${placed.concat(offMap)
+      .map(([c, n]) => `<li data-c="${esc(c)}"><span>${esc(c)}</span><span class="d">${n.toLocaleString()}</span></li>`).join("")}</ul>`;
+    $("mapList").querySelectorAll("li[data-c]").forEach(li => li.onclick = () => countryDetail(li.dataset.c));
     $("blastModal").hidden = true; $("mapModal").hidden = false;
   }
-  function mapListCountry(c, hs) {
-    mapCountry = c;
+
+  function countryDetail(c) {
     $("worldSvg").querySelectorAll("g").forEach(g => g.querySelector("circle").classList.toggle("on", g.dataset.c === c));
+    const n = (mapView.counts.find(([k]) => k === c) || [, 0])[1];
+    const items = mapView.onCountry(c);    // [{id, rank?, sub, right, inGraph}]
     $("mapList").innerHTML = `<p><button class="btn ghost" id="mapBack" type="button">All countries</button></p>
-      <h3 style="margin:6px 0">${esc(c)} · ${hs.length} hit${hs.length > 1 ? "s" : ""}</h3>
-      <ul class="nb">${hs.map(h => `<li data-id="${esc(h.plasmid)}" data-g="${h.in_graph ? 1 : 0}"><span><span class="chip">#${h.rank}</span> ${esc(h.plasmid)}<br>
-        <span class="hint" style="font-size:12px">${h.in_graph ? esc(graph.getNodeAttribute(h.plasmid, "community") || "") : "not in graph"}</span></span>
-        <span class="d">${h.identity}%</span></li>`).join("")}</ul>`;
-    $("mapBack").onclick = showHitsMap;
-    $("mapList").querySelectorAll("li[data-id]").forEach(li => { if (li.dataset.g === "1") li.onclick = () => {
-      $("mapModal").hidden = true; showHitsInGraph(li.dataset.id); }; });
+      <h3 style="margin:6px 0">${esc(c)} · ${plural(n, mapView.what)}</h3>
+      ${mapView.detailNote ? `<p class="hint" style="margin:0 0 6px">${mapView.detailNote(c, items.length, n)}</p>` : ""}
+      <ul class="nb">${items.map(h => `<li data-id="${esc(h.id)}" data-g="${h.inGraph ? 1 : 0}"><span>${h.rank ? `<span class="chip">#${h.rank}</span> ` : ""}${esc(h.id)}<br>
+        <span class="hint" style="font-size:12px">${esc(h.sub || "")}</span></span><span class="d">${esc(h.right || "")}</span></li>`).join("")}</ul>`;
+    $("mapBack").onclick = () => drawMap(mapView);
+    $("mapList").querySelectorAll('li[data-g="1"]').forEach(li => li.onclick = () => {
+      $("mapModal").hidden = true; mapView.onPick(li.dataset.id); });
   }
+
+  // Search hits: country from the graph metadata, else from PLSDB's reply.
+  function showHitsMap() {
+    if (!lastResult) return;
+    const list = shownHits(lastResult).map((h, i) => Object.assign({ rank: i + 1 }, h));
+    const country = h => normCountry((h.in_graph && graph.hasNode(h.plasmid) && graph.getNodeAttribute(h.plasmid, "country")) || h.country);
+    const counts = new Map(); let noCountry = 0;
+    list.forEach(h => { const c = country(h); if (!c) noCountry++; else counts.set(c, (counts.get(c) || 0) + 1); });
+    drawMap({ title: "Search hits on the world map", what: "hit", counts: [...counts], noCountry,
+      onCountry: c => list.filter(h => country(h) === c).map(h => ({ id: h.plasmid, rank: h.rank, inGraph: h.in_graph,
+        sub: h.in_graph ? graph.getNodeAttribute(h.plasmid, "community") || "" : "not in graph", right: h.identity + "%" })),
+      onPick: id => showHitsInGraph(id) });
+  }
+
+  // A whole PLING community: counts cover EVERY member in PLSDB (community_countries.js),
+  // so other genera are included; the list per country shows the members drawn in this graph.
+  function showCommunityMap(cid) {
+    const cc = (window.COMMUNITY_COUNTRIES || {})[cid];
+    if (!cc) return;
+    const counts = new Map(); let noCountry = 0;
+    Object.entries(cc).forEach(([c, n]) => { c = normCountry(c); if (!c) noCountry += n; else counts.set(c, (counts.get(c) || 0) + n); });
+    const inGraph = [];
+    graph.forEachNode((id, a) => { if (a.community === cid) inGraph.push([id, a]); });
+    drawMap({ title: `Where community ${cid.replace("pling_community_", "c").replace("_subcommunity_", " · sub ")} has been found`,
+      what: "plasmid", counts: [...counts], noCountry,
+      note: `Counts cover all members of this PLING community in PLSDB, not only the K. pneumoniae plasmids drawn in the graph.`,
+      detailNote: (c, k, n) => k ? `${k} of these ${n} are in the graph; click one to open it.` : "None of these are in the graph (other hosts).",
+      onCountry: c => inGraph.filter(([, a]) => normCountry(a.country) === c).map(([id, a]) => ({ id, inGraph: true,
+        sub: [a.host, (a.collection_date || "").slice(0, 4)].filter(Boolean).join(" · "), right: a.verdict || "" })),
+      onPick: id => select(id, true) });
+  }
+
+  info.addEventListener("click", e => { const b = e.target.closest(".mapbtn"); if (!b) return;
+    if (b.classList.contains("timebtn")) showTimeline(b.dataset.comm); else showCommunityMap(b.dataset.comm); });
+
+  // ---------- COMMUNITY TIMELINE (stacked bars: year x host species) ----------
+  // Counts cover every member of the community in PLSDB (community_timeline.js).
+  // Top 7 species keep fixed palette slots in order of size; the rest fold into grey "Other".
+  const TL_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6"];
+  const TL_OTHER = "#a3a39c";
+  const spName = s => s.replace(/_/g, " ");
+  function showTimeline(cid) {
+    const T = (window.COMMUNITY_TIMELINE || {})[cid]; if (!T) return;
+    const names = Object.keys(T.series), nY = T.series[names[0]].length;
+    const col = (s, i) => s === "Other species" ? TL_OTHER : TL_COLORS[i];
+    const totals = Array.from({ length: nY }, (_, k) => names.reduce((t, s) => t + T.series[s][k], 0));
+    const grand = totals.reduce((a, b) => a + b, 0), ymax = Math.max(1, ...totals);
+    const short = cid.replace("pling_community_", "c").replace("_subcommunity_", " · sub ");
+    $("timeTitle").textContent = `Community ${short}: plasmids per year by host species`;
+    $("timeHint").textContent = `${grand.toLocaleString()} plasmids from ${T.n_species} host species, ${T.y0}–${T.y0 + nY - 1}` +
+      (T.no_year ? ` (${T.no_year} without a year)` : "") + `. All members in PLSDB, not only K. pneumoniae. ` +
+      `Year = year the sequence record was created in NCBI. Hover a bar for details; click a species to highlight it.`;
+    // legend (with totals) - identity never by colour alone
+    let focus = null;
+    $("timeLegend").innerHTML = names.map((s, i) => `<span data-s="${esc(s)}" style="cursor:pointer"><i style="background:${col(s, i)}"></i>${esc(spName(s))} <span class="hint">${T.series[s].reduce((a, b) => a + b, 0).toLocaleString()}</span></span>`).join("");
+    // chart geometry
+    const W = 1000, H = 360, L = 44, R = 10, Tp = 10, B = 28, pw = W - L - R, ph = H - Tp - B;
+    const step = pw / nY, bw = Math.max(2, Math.min(28, step - 3));
+    const nice = v => { const p = Math.pow(10, Math.floor(Math.log10(v))); return [1, 2, 2.5, 5, 10].map(m => m * p).find(m => m >= v); };
+    const tick = nice(ymax / 4), top = Math.ceil(ymax / tick) * tick, Y = v => Tp + ph - v / top * ph;
+    let g = "";
+    for (let v = 0; v <= top; v += tick) g += `<line class="grid" x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}"/><text class="ax" x="${L - 6}" y="${Y(v) + 4}" text-anchor="end">${v}</text>`;
+    const every = Math.ceil(nY / 14);
+    for (let k = 0; k < nY; k++) {
+      const x = L + k * step + (step - bw) / 2; let acc = 0;
+      names.forEach((s, i) => { const n = T.series[s][k]; if (!n) return;
+        g += `<rect class="seg" data-s="${esc(s)}" x="${x}" y="${Y(acc + n)}" width="${bw}" height="${Math.max(0.5, Y(acc) - Y(acc + n))}" fill="${col(s, i)}"/>`; acc += n; });
+      if (k % every === 0 || k === nY - 1) g += `<text class="ax" x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${T.y0 + k}</text>`;
+      g += `<rect class="hit" data-k="${k}" x="${L + k * step}" y="${Tp}" width="${step}" height="${ph}"/>`;
+    }
+    const svg = $("timeSvg"); svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.innerHTML = g;
+    const tip = $("timeTip");
+    svg.querySelectorAll("rect.hit").forEach(r => {
+      r.onmousemove = e => { const k = +r.dataset.k, box = svg.parentNode.getBoundingClientRect();
+        tip.innerHTML = `<b>${T.y0 + k}</b> · ${totals[k].toLocaleString()} plasmid${totals[k] === 1 ? "" : "s"}` +
+          names.map((s, i) => T.series[s][k] ? `<div class="r"><span><i style="background:${col(s, i)}"></i>${esc(spName(s))}</span><span>${T.series[s][k]}</span></div>` : "").join("");
+        tip.hidden = false; const x = e.clientX - box.left, w = tip.offsetWidth;
+        tip.style.left = Math.min(box.width - w - 4, Math.max(4, x + 14)) + "px"; tip.style.top = Math.max(0, e.clientY - box.top - 20) + "px"; };
+      r.onmouseleave = () => { tip.hidden = true; };
+    });
+    $("timeLegend").querySelectorAll("span[data-s]").forEach(el => el.onclick = () => {
+      focus = focus === el.dataset.s ? null : el.dataset.s;
+      svg.querySelectorAll("rect.seg").forEach(r => r.classList.toggle("dim", !!focus && r.dataset.s !== focus));
+      $("timeLegend").querySelectorAll("span[data-s]").forEach(x => x.style.opacity = !focus || x.dataset.s === focus ? 1 : .45);
+    });
+    // table view
+    $("timeTable").innerHTML = `<table><thead><tr><th>Year</th>${names.map(s => `<th>${esc(spName(s))}</th>`).join("")}<th>Total</th></tr></thead><tbody>` +
+      totals.map((t, k) => t ? `<tr><td>${T.y0 + k}</td>${names.map(s => `<td>${T.series[s][k] || ""}</td>`).join("")}<td>${t}</td></tr>` : "").join("") + "</tbody></table>";
+    $("timeModal").hidden = false;
+  }
+  $("timeClose").onclick = () => { $("timeModal").hidden = true; };
+  $("timeModal").onclick = e => { if (e.target.id === "timeModal") $("timeModal").hidden = true; };
   $("mapClose").onclick = () => { $("mapModal").hidden = true; };
   $("mapModal").onclick = e => { if (e.target.id === "mapModal") $("mapModal").hidden = true; };
 
@@ -1245,6 +1370,7 @@
   $("blastModal").onclick = e => { if (e.target.id === "blastModal") $("blastModal").hidden = true; };
   document.addEventListener("keydown", e => {
     if (e.key !== "Escape") return;
+    if (!$("timeModal").hidden) { $("timeModal").hidden = true; return; }
     if (!$("mapModal").hidden) { $("mapModal").hidden = true; return; }
     if (!$("blastModal").hidden) { $("blastModal").hidden = true; return; }
     if (groupSel !== null) selectGroup(groupSel);     // second Escape clears the legend group
