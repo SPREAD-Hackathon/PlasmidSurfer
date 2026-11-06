@@ -763,37 +763,73 @@
         }
       }
 
-      // PLSDB returns a pandas DataFrame serialized with orient="split":
-      // { columns: [...], index: [...], data: [[...], ...] }
+      // PLSDB response formats:
+      // 1. New API: { results: { ..., result: [...] } }
+      // 2. DataFrame: { results: { columns: [...], data: [...] } }
+      // 3. Legacy formats: direct array or { results: [...] }
+
       let resultTable = jobData.results;
+
+      // Handle results serialized as JSON strings.
       if (typeof resultTable === "string") {
         try {
           resultTable = JSON.parse(resultTable);
         } catch (error) {
-          throw new Error(`PLSDB returned results as invalid JSON: ${error.message}. Response: ${String(jobData.results).slice(0, 2000)}`);
+          throw new Error(
+            `PLSDB returned results as invalid JSON: ${error.message}. ` +
+            `Response: ${String(jobData.results).slice(0, 2000)}`
+          );
         }
       }
-
+      
       let rows = [];
+      
       if (Array.isArray(resultTable)) {
+      
+        // Direct array.
         rows = resultTable;
-      } else if (resultTable && Array.isArray(resultTable.data) &&
-                 Array.isArray(resultTable.columns)) {
+      
+      } else if (resultTable && Array.isArray(resultTable.result)) {
+      
+        // Current PLSDB API format.
+        rows = resultTable.result;
+      
+      } else if (
+        resultTable &&
+        Array.isArray(resultTable.data) &&
+        Array.isArray(resultTable.columns)
+      ) {
+      
+        // Pandas DataFrame orient="split".
         rows = resultTable.data.map(values => {
           const row = {};
+      
           resultTable.columns.forEach((column, i) => {
             row[column] = values[i];
           });
+      
           return row;
         });
+      
       } else if (resultTable && Array.isArray(resultTable.results)) {
+      
+        // Alternative nested format.
         rows = resultTable.results;
+      
       } else {
-        console.error("Unrecognized successful PLSDB response:", jobData);
+      
+        console.error(
+          "Unrecognized successful PLSDB response:",
+          jobData
+        );
+      
         throw new Error(
-          `PLSDB marked the job finished but returned an unrecognized results format. Full response: ${JSON.stringify(jobData, null, 2).slice(0, 5000)}`
+          `PLSDB marked the job finished but returned an unrecognized results format. ` +
+          `Full response: ${JSON.stringify(jobData, null, 2).slice(0, 5000)}`
         );
       }
+      
+      console.log(`PLSDB returned ${rows.length} raw hits.`);
 
       const formattedHits = [];
 
