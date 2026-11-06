@@ -471,6 +471,7 @@
       const putParams = new URLSearchParams({
         CMD: "Put",
         PROGRAM: "blastn",
+        MEGABLAST: "on",
         DATABASE: "nt",
         ENTREZ_QUERY: "plasmid[filter]",
         QUERY: seq
@@ -506,7 +507,8 @@
       }
 
       $("blastStatus").textContent = "Search complete. Downloading results...";
-      const resultsUrl = `/api/ncbi-blast?CMD=Get&FORMAT_TYPE=JSON2&RID=${rid}`;
+      const maxHits = +$("blastMax").value || 50;
+      const resultsUrl = `/api/ncbi-blast?CMD=Get&FORMAT_TYPE=JSON2&HITLIST_SIZE=${maxHits}&RID=${rid}`;
       const resultsResponse = await fetch(resultsUrl);
       const jsonResult = await resultsResponse.json();
 
@@ -530,7 +532,6 @@
 
       const minId = +$("blastMinId").value || 0;
       const minCov = +$("blastMinCov").value || 0;
-      const maxHits = +$("blastMax").value || 50;
 
       const formattedHits = [];
       ncbiHits.forEach((hit) => {
