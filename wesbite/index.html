@@ -378,7 +378,7 @@
   }
 
   function setFocus() {
-    const n = hovered || selected;
+    const n = selected || hovered;
     focus = new Set();
     if (n) {
       focus.add(n);
@@ -416,7 +416,7 @@
       if (minPhri && n !== selected && !a.phriPass) {
         return { hidden: true };
       }
-      const center = hovered || selected;
+      const center = selected || hovered;
       if (focus.size) {
         if (focus.has(n)) {
           return Object.assign({}, a, {
@@ -447,7 +447,7 @@
       if (minPhri && (!graph.getNodeAttribute(a.s, "phriPass") || !graph.getNodeAttribute(a.t, "phriPass"))) {
         return { hidden: true };
       }
-      const center = hovered || selected;
+      const center = selected || hovered;
       if (center) {
         if (a.s === center || a.t === center) {
           return Object.assign({}, a, { color: COLOR_EDGE_HI, forceLabel: true, zIndex: 2 });
@@ -764,13 +764,10 @@
       }
 
       // PLSDB response formats:
-      // 1. New API: { results: { ..., result: [...] } }
+      // 1. Current API: { results: { ..., result: [...] } }
       // 2. DataFrame: { results: { columns: [...], data: [...] } }
-      // 3. Legacy formats: direct array or { results: [...] }
-
+      // 3. Legacy: direct array or { results: [...] }
       let resultTable = jobData.results;
-
-      // Handle results serialized as JSON strings.
       if (typeof resultTable === "string") {
         try {
           resultTable = JSON.parse(resultTable);
@@ -781,54 +778,34 @@
           );
         }
       }
-      
+
       let rows = [];
-      
       if (Array.isArray(resultTable)) {
-      
-        // Direct array.
         rows = resultTable;
-      
       } else if (resultTable && Array.isArray(resultTable.result)) {
-      
-        // Current PLSDB API format.
         rows = resultTable.result;
-      
       } else if (
         resultTable &&
         Array.isArray(resultTable.data) &&
         Array.isArray(resultTable.columns)
       ) {
-      
-        // Pandas DataFrame orient="split".
         rows = resultTable.data.map(values => {
           const row = {};
-      
           resultTable.columns.forEach((column, i) => {
             row[column] = values[i];
           });
-      
           return row;
         });
-      
       } else if (resultTable && Array.isArray(resultTable.results)) {
-      
-        // Alternative nested format.
         rows = resultTable.results;
-      
       } else {
-      
-        console.error(
-          "Unrecognized successful PLSDB response:",
-          jobData
-        );
-      
+        console.error("Unrecognized successful PLSDB response:", jobData);
         throw new Error(
           `PLSDB marked the job finished but returned an unrecognized results format. ` +
           `Full response: ${JSON.stringify(jobData, null, 2).slice(0, 5000)}`
         );
       }
-      
+
       console.log(`PLSDB returned ${rows.length} raw hits.`);
 
       const formattedHits = [];
@@ -940,16 +917,43 @@
   })();
 
   function select(n, move) {
-    selected = n; setFocus(); showInfo(n); scheduleRefresh();
+    // A programmatic selection (e.g. clicking a PLSDB hit) must take priority
+    // over any node that Sigma may still consider hovered.
+    selected = n;
+    hovered = null;
+
+    setFocus();
+    showInfo(n);
+    scheduleRefresh();
+
     if (n && move) {
       const p = renderer.getNodeDisplayData(n);
       let span = 0;
+
       focus.forEach(m => {
         const q = renderer.getNodeDisplayData(m);
-        if (q && p) span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y));
+        if (q && p) {
+          span = Math.max(
+            span,
+            Math.abs(q.x - p.x),
+            Math.abs(q.y - p.y)
+          );
+        }
       });
-      const ratio = focus.size > 1 ? Math.min(1, Math.max(0.01, span * 3)) : (big ? 0.08 : 0.5);
-      if (p) renderer.getCamera().animate({ x: p.x, y: p.y, ratio }, { duration: 500 });
+
+      // Avoid an extreme zoom-in when a hit has only one or two very close
+      // neighbours. Sigma camera ratios below 0.08 can make the graph appear
+      // to disappear even though the nodes are still present.
+      const ratio = focus.size > 1
+        ? Math.min(1, Math.max(0.08, span * 3))
+        : (big ? 0.08 : 0.5);
+
+      if (p) {
+        renderer.getCamera().animate(
+          { x: p.x, y: p.y, ratio },
+          { duration: 500 }
+        );
+      }
     }
   }
 
