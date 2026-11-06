@@ -57,7 +57,7 @@ Paste a plasmid sequence and PlasmidSurfer searches **PLSDB**. It lights up the 
 
 ## How the risk verdict works
 
-The verdict is **rule-based, not a black box**. Every number traces back to a weight table you can argue with. The full write-up is in [`docs/METHODS.md`](docs/methods.md).
+The verdict is **rule-based, not a black box**. Every number traces back to a weight table you can argue with. The full write-up is in [`docs/methods.md`](docs/methods.md).
 
 | Axis | Question | Weight |
 |---|---|---|
