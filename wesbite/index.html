@@ -134,91 +134,157 @@
 <script>
 (function () {
   const DATA = window.PLASMID_GRAPH;
-  if (DATA.node_columns) {   // compact table format from build_graph.py
+  if (DATA.node_columns) {
     const C = DATA.node_columns;
-    DATA.nodes = DATA.node_rows.map(r => { const o = {}; C.forEach((c, i) => { if (r[i] !== "" && r[i] !== null) o[c] = r[i]; }); return o; });
+    DATA.nodes = DATA.node_rows.map(r => {
+      const o = {};
+      for (let i = 0; i < C.length; i++) {
+        if (r[i] !== "" && r[i] !== null) o[C[i]] = r[i];
+      }
+      return o;
+    });
     delete DATA.node_rows;
   }
-  if (DATA.phri_rows) {      // PHRI: per-plasmid scores from data_phri.js, same order as the nodes
+  if (DATA.phri_rows) {
     const P = DATA.phri_columns;
-    DATA.phri_rows.forEach((r, i) => P.forEach((c, j) => { if (r[j] !== "") DATA.nodes[i][c] = r[j]; }));
+    DATA.phri_rows.forEach((r, i) => {
+      for (let j = 0; j < P.length; j++) {
+        if (r[j] !== "") DATA.nodes[i][P[j]] = r[j];
+      }
+    });
     delete DATA.phri_rows;
   }
-  const hasPhri = window.PHRI ? PHRI.init(DATA) : false;   // PHRI
-  const PHRI_GROUP = (DATA.phri && DATA.phri.community_field) || "community";   // PHRI: grouping used for the spread axis
+
+  const hasPhri = window.PHRI ? PHRI.init(DATA) : false;
+  const PHRI_GROUP = (DATA.phri && DATA.phri.community_field) || "community";
   DATA.edges = DATA.edges || [];
-  const PALETTE = ["#2a6fdb", "#e0663a", "#2e9e6a", "#b347c6", "#d4a21b", "#1aa0b4",
-                   "#d1477a", "#7a8a2e", "#8a5a3c", "#5b5fd6", "#3fae3a", "#c0392b"];
+
+  const PALETTE = [
+    "#2a6fdb", "#e0663a", "#2e9e6a", "#b347c6", "#d4a21b", "#1aa0b4",
+    "#d1477a", "#7a8a2e", "#8a5a3c", "#5b5fd6", "#3fae3a", "#c0392b"
+  ];
   const OTHER = "#9a9a94", ABSENT = "#cfcfc8";
-  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  // OPTIMIZATION 1: Cache CSS custom properties once at startup (never inside reducers)
+  const rootStyle = getComputedStyle(document.documentElement);
+  const css = n => rootStyle.getPropertyValue(n).trim();
+  const COLOR_TEXT = css("--text");
+  const COLOR_MUTED = css("--muted");
+  const COLOR_EDGE = css("--edge");
+  const COLOR_BORDER = css("--border");
+  const COLOR_EDGE_HI = css("--edge-hi");
 
   // ---------- build graph ----------
   const graph = new graphology.Graph({ type: "undirected", multi: false });
+  const totalNodes = DATA.nodes.length;
+  const commCounts = new Map();
+
   DATA.nodes.forEach((n, i) => {
-    const a = 2 * Math.PI * i / DATA.nodes.length;
+    const a = 2 * Math.PI * i / totalNodes;
+    commCounts.set(n.community, (commCounts.get(n.community) || 0) + 1);
     graph.addNode(n.id, Object.assign({}, n, {
-      label: n.id, x: n.x ?? Math.cos(a), y: n.y ?? Math.sin(a), size: 6
+      label: n.id,
+      x: n.x ?? Math.cos(a),
+      y: n.y ?? Math.sin(a),
+      size: 6,
+      phriPass: true
     }));
   });
+
   let maxD = 0;
+  const edgeDistCounts = new Map(); // Precompute edge counts per DCJ distance
+
   DATA.edges.forEach(([s, t, d]) => {
-    if (typeof s === "number") { s = DATA.nodes[s].id; t = DATA.nodes[t].id; }  // compact format: indices
+    if (typeof s === "number") { s = DATA.nodes[s].id; t = DATA.nodes[t].id; }
     if (s === t || graph.hasEdge(s, t)) return;
-    maxD = Math.max(maxD, d);
-    graph.addEdge(s, t, { dist: d, label: "DCJ " + d });
+    if (d > maxD) maxD = d;
+    edgeDistCounts.set(d, (edgeDistCounts.get(d) || 0) + 1);
+
+    // OPTIMIZATION 2: Precompute edge metadata once so edgeReducer does zero lookups
+    const sameType = graph.getNodeAttribute(s, "pling_type") === graph.getNodeAttribute(t, "pling_type");
+    const baseSize = Math.max(0.6, 3.2 - 0.5 * d);
+    graph.addEdge(s, t, {
+      dist: d,
+      label: "DCJ " + d,
+      s,
+      t,
+      sameType,
+      size: baseSize
+    });
   });
+
   const big = graph.order > 1000;
-  const TOPK = DATA.top_k || 0;      // >0: data file holds only each plasmid's TOPK closest links
+  const TOPK = DATA.top_k || 0;
   const hasLength = (DATA.metadata_columns || []).includes("length_bp");
-  // dot size: plasmid length on a log scale (1 kb small ... 1 Mb large), or number of relatives
+
   function resize() {
     const mode = document.getElementById("sizeBy").value;
     const lo = big ? 1 : 3, span = big ? 1.3 : 5;
     graph.forEachNode((n, a) => {
       let v;
       if (mode === "length" && hasLength && +a.length_bp > 0)
-        v = lo + span * Math.max(0, Math.min(3.3, Math.log10(+a.length_bp) - 3));   // 1 kb -> lo, 10 kb, 100 kb, 1 Mb -> lo + 3*span
+        v = lo + span * Math.max(0, Math.min(3.3, Math.log10(+a.length_bp) - 3));
       else if (mode === "relatives")
         v = (big ? 2 : 4) + (big ? 0.8 : 2.2) * Math.sqrt(a.relatives ?? graph.degree(n));
       else v = big ? 3 : 6;
       graph.setNodeAttribute(n, "size", v);
     });
   }
-  if (!hasLength) { document.getElementById("sizeBy").value = "relatives"; document.getElementById("sizeBy").options[0].disabled = true; }
+  if (!hasLength) {
+    document.getElementById("sizeBy").value = "relatives";
+    document.getElementById("sizeBy").options[0].disabled = true;
+  }
   resize();
 
-  // layout: only computed here if the data file has no positions (fine up to a few thousand nodes)
+  // OPTIMIZATION 3: Enable barnesHutOptimize for O(V log V) ForceAtlas2 layout
   if (DATA.nodes.length && DATA.nodes[0].x === undefined) {
     const FA2 = graphologyLibrary.layoutForceAtlas2;
-    const settings = Object.assign(FA2.inferSettings(graph), { gravity: 1.5, scalingRatio: 8 });
-    // lay out using only the edges inside the PLING threshold so communities separate
+    const settings = Object.assign(FA2.inferSettings(graph), {
+      gravity: 1.5,
+      scalingRatio: 8,
+      barnesHutOptimize: graph.order > 300,
+      barnesHutTheta: 0.6
+    });
     const g2 = graph.copy();
     g2.filterEdges((e, a) => a.dist > 4).forEach(e => g2.dropEdge(e));
     g2.forEachEdge((e, a) => g2.setEdgeAttribute(e, "weight", 1 / (1 + a.dist)));
-    FA2.assign(g2, { iterations: DATA.nodes.length > 2000 ? 300 : 600, settings,
-                     getEdgeWeight: "weight" });
+    FA2.assign(g2, {
+      iterations: DATA.nodes.length > 2000 ? 200 : 500,
+      settings,
+      getEdgeWeight: "weight"
+    });
     g2.forEachNode((n, a) => graph.mergeNodeAttributes(n, { x: a.x, y: a.y }));
   }
 
   // ---------- colour options ----------
   const metaCols = DATA.metadata_columns || [];
-  // colour options: every metadata column except ids, numbers, gene lists, dates and free text
-  // (a column with more than 3,000 distinct values, or one per plasmid, is not offered)
-  const distinct = c => { const s = new Set(); graph.forEachNode((n, a) => s.add(a[c])); return s.size; };
+  const distinct = c => {
+    const s = new Set();
+    const limit = Math.min(3000, 0.5 * graph.order + 20);
+    const nodes = DATA.nodes;
+    for (let i = 0; i < nodes.length; i++) {
+      s.add(nodes[i][c]);
+      if (s.size > limit) return s.size; // Early exit once limit exceeded
+    }
+    return s.size;
+  };
   const colourable = ["community"].concat(metaCols.filter(c =>
     !["accession", "length_bp", "amr_genes", "collection_date", "submission_date", "description"].includes(c) &&
     distinct(c) <= Math.min(3000, 0.5 * graph.order + 20)));
+
   const colorBy = document.getElementById("colorBy");
   const pretty = c => c.replace(/_/g, " ");
   colourable.forEach(c => colorBy.add(new Option(pretty(c), c)));
   colorBy.add(new Option("PLING subcommunity", "pling_type"));
-  // when one PLING community holds most plasmids (real PLSDB), subcommunities are the useful colouring
-  const commCounts = new Map(); graph.forEachNode((n, a) => commCounts.set(a.community, (commCounts.get(a.community) || 0) + 1));
+
   const giant = Math.max(...commCounts.values()) > 0.5 * graph.order;
   if (giant) colorBy.value = "pling_type";
-  const dateCol = metaCols.includes("collection_date") ? "collection_date" : metaCols.includes("submission_date") ? "submission_date" : null;
+
+  const dateCol = metaCols.includes("collection_date") ? "collection_date"
+                : metaCols.includes("submission_date") ? "submission_date" : null;
   if (dateCol) colorBy.add(new Option(dateCol === "collection_date" ? "collection year" : "submission year", "__year"));
-  if (hasPhri) colorBy.add(new Option("public health risk (PHRI)", "__phri"));   // PHRI
+  if (hasPhri) colorBy.add(new Option("public health risk (PHRI)", "__phri"));
+
   const hasAmr = metaCols.includes("amr_genes");
   const allGenes = new Map();
   if (hasAmr) {
@@ -227,46 +293,55 @@
     graph.forEachNode((n, a) => (a.amr_genes || "").split(";").filter(Boolean)
       .forEach(g => allGenes.set(g, (allGenes.get(g) || 0) + 1)));
     const geneSel = document.getElementById("gene");
+    const frag = document.createDocumentFragment();
     [...allGenes.entries()].sort((a, b) => b[1] - a[1])
-      .forEach(([g, k]) => geneSel.add(new Option(`${g} (${k})`, g)));
+      .forEach(([g, k]) => frag.appendChild(new Option(`${g} (${k})`, g)));
+    geneSel.appendChild(frag);
   }
 
-  const valueOf = (attrs, key) => {
+  const valueOf = (attrs, key, selectedGene) => {
     if (key === "__year") return (attrs[dateCol] || "").slice(0, 4) || "unknown";
     if (key === "__anyamr") return (attrs.amr_genes || "").trim() ? "carries AMR genes" : "no AMR genes";
-    if (key === "__phri") return PHRI.bandLabel(attrs);   // PHRI
+    if (key === "__phri") return PHRI.bandLabel(attrs);
     if (key === "__gene") {
-      const g = document.getElementById("gene").value;
-      return (attrs.amr_genes || "").split(";").includes(g) ? "carries " + g : "does not";
+      return (attrs.amr_genes || "").split(";").includes(selectedGene) ? "carries " + selectedGene : "does not";
     }
     return attrs[key] || "unknown";
   };
 
   let colourMap = new Map();
+  let renderer = null;
+
   function recolour() {
     const key = colorBy.value;
+    const selectedGene = key === "__gene" ? document.getElementById("gene").value : "";
     document.getElementById("geneWrap").hidden = key !== "__gene";
     const counts = new Map();
-    graph.forEachNode((n, a) => { const v = valueOf(a, key); counts.set(v, (counts.get(v) || 0) + 1); });
+    graph.forEachNode((n, a) => {
+      const v = valueOf(a, key, selectedGene);
+      counts.set(v, (counts.get(v) || 0) + 1);
+    });
     let order = [...counts.entries()].sort((a, b) => b[1] - a[1]);
     if (key === "__year") order.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
-    if (key === "__phri") { const ord = PHRI.bandOrder(); order.sort((a, b) => ord.indexOf(a[0]) - ord.indexOf(b[0])); }   // PHRI: worst first
+    if (key === "__phri") {
+      const ord = PHRI.bandOrder();
+      order.sort((a, b) => ord.indexOf(a[0]) - ord.indexOf(b[0]));
+    }
     colourMap = new Map();
     if (key === "__anyamr") {
       colourMap.set("carries AMR genes", "#d1477a");
       colourMap.set("no AMR genes", ABSENT);
-    } else if (key === "__phri") {   // PHRI
+    } else if (key === "__phri") {
       colourMap = PHRI.bandColours();
       colourMap.set("unknown", ABSENT);
     } else if (key === "__gene") {
-      colourMap.set("carries " + document.getElementById("gene").value, PALETTE[1]);
+      colourMap.set("carries " + selectedGene, PALETTE[1]);
       colourMap.set("does not", ABSENT);
     } else {
-      // communities: cycle the palette so neighbouring groups still differ; other fields: top groups only
       order.forEach(([v], i) => colourMap.set(v, v === "unknown" ? ABSENT :
         (key === "community" || key === "pling_type" ? PALETTE[i % PALETTE.length] : (PALETTE[i] || OTHER))));
     }
-    graph.forEachNode((n, a) => graph.setNodeAttribute(n, "color", colourMap.get(valueOf(a, key)) || OTHER));
+    graph.forEachNode((n, a) => graph.setNodeAttribute(n, "color", colourMap.get(valueOf(a, key, selectedGene)) || OTHER));
     const legend = document.getElementById("legend");
     const shown = order.slice(0, PALETTE.length);
     const title = key === "pling_type" ? "PLING subcommunity" : key === "__gene" ? "AMR gene" : key === "__anyamr" ? "AMR genes"
@@ -278,72 +353,110 @@
       (order.length > shown.length ? (key === "community" || key === "pling_type"
         ? `<div style="color:var(--muted)">+ ${order.length - shown.length} smaller ${key === "community" ? "communities" : "subcommunities"}</div>`
         : `<div><span class="sw" style="background:${OTHER}"></span>other (${order.length - shown.length} groups)</div>`) : "");
-    renderer && renderer.refresh();
+    if (renderer) scheduleRefresh();
   }
 
   // ---------- renderer ----------
   const dcj = document.getElementById("dcj");
   dcj.max = Math.max(4, maxD);
   let threshold = +dcj.value, selected = null, hovered = null, showAll = false;
-  let minPhri = 0;   // PHRI: hide plasmids scoring below this (0 = off)
-  const phriOk = n => !minPhri || PHRI.passesFilter(graph.getNodeAttributes(n), minPhri);
+  let minPhri = 0;
   let focus = new Set();
-  let hits = new Map();        // BLAST hits shown in the graph: plasmid id -> hit (with rank)
+  let hits = new Map();
+
+  function updatePhriFilter() {
+    if (!minPhri) {
+      graph.forEachNode(n => graph.setNodeAttribute(n, "phriPass", true));
+    } else {
+      graph.forEachNode((n, a) => graph.setNodeAttribute(n, "phriPass", PHRI.passesFilter(a, minPhri)));
+    }
+  }
 
   function setFocus() {
     const n = hovered || selected;
     focus = new Set();
     if (n) {
       focus.add(n);
-      graph.forEachNeighbor(n, (m) => { if (graph.getEdgeAttribute(graph.edge(n, m), "dist") <= threshold) focus.add(m); });
+      graph.forEachNeighbor(n, m => {
+        if (graph.getEdgeAttribute(graph.edge(n, m), "dist") <= threshold) focus.add(m);
+      });
+    }
+    if (renderer) {
+      // Only pay the cost of rendering edge labels when a node is actively focused
+      renderer.setSetting("renderEdgeLabels", Boolean(n));
     }
   }
 
-  const renderer = new Sigma(graph, document.getElementById("graph"), {
-    renderEdgeLabels: true,
+  // OPTIMIZATION 4: Throttle refreshes via requestAnimationFrame & skipIndexation
+  let rafId = 0;
+  function scheduleRefresh() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      renderer.refresh({ skipIndexation: true });
+    });
+  }
+
+  recolour();
+
+  renderer = new Sigma(graph, document.getElementById("graph"), {
+    renderEdgeLabels: false, // Toggled dynamically only when a node is hovered/selected
     labelRenderedSizeThreshold: graph.order > 1000 ? 14 : 9,
-    labelColor: { color: css("--text") },
-    edgeLabelColor: { color: css("--muted") },
+    labelColor: { color: COLOR_TEXT },
+    edgeLabelColor: { color: COLOR_MUTED },
     edgeLabelSize: 11,
     labelSize: 12,
-    defaultEdgeColor: css("--edge"),
+    defaultEdgeColor: COLOR_EDGE,
     zIndex: true,
-    // big graphs: keep dots the same size on screen, so zooming in pulls close relatives apart
     zoomToSizeRatioFunction: big ? (() => 1) : Math.sqrt,
     nodeReducer: (n, a) => {
-      const r = Object.assign({}, a);
-      if (minPhri && n !== selected && !PHRI.passesFilter(a, minPhri)) { r.hidden = true; return r; }   // PHRI
+      if (minPhri && n !== selected && !a.phriPass) {
+        return { hidden: true };
+      }
+      const center = hovered || selected;
       if (focus.size) {
-        if (focus.has(n)) { r.forceLabel = true; r.zIndex = 2; if (n === (hovered || selected)) r.highlighted = true; }
-        else { r.color = css("--border"); r.label = ""; r.zIndex = 0; }
-      } else if (hits.size) {
+        if (focus.has(n)) {
+          return Object.assign({}, a, {
+            forceLabel: true,
+            zIndex: 2,
+            highlighted: n === center
+          });
+        }
+        return Object.assign({}, a, { color: COLOR_BORDER, label: "", zIndex: 0 });
+      }
+      if (hits.size) {
         const h = hits.get(n);
-        if (h) { r.size = a.size + 3; r.zIndex = 2; r.highlighted = h.rank <= 3; if (h.rank <= 10 || showAll) r.forceLabel = true; }
-        else { r.color = css("--border"); r.label = ""; r.zIndex = 0; }
-      } else if (showAll) r.forceLabel = true;
-      return r;
+        if (h) {
+          return Object.assign({}, a, {
+            size: a.size + 3,
+            zIndex: 2,
+            highlighted: h.rank <= 3,
+            forceLabel: h.rank <= 10 || showAll
+          });
+        }
+        return Object.assign({}, a, { color: COLOR_BORDER, label: "", zIndex: 0 });
+      }
+      if (showAll) return Object.assign({}, a, { forceLabel: true });
+      return a;
     },
     edgeReducer: (e, a) => {
-      const r = Object.assign({}, a);
-      if (a.dist > threshold) { r.hidden = true; return r; }
-      if (minPhri && !graph.extremities(e).every(phriOk)) { r.hidden = true; return r; }   // PHRI
-      r.size = Math.max(0.6, 3.2 - 0.5 * a.dist);
-      const [s, t] = graph.extremities(e);
+      if (a.dist > threshold) return { hidden: true };
+      if (minPhri && (!graph.getNodeAttribute(a.s, "phriPass") || !graph.getNodeAttribute(a.t, "phriPass"))) {
+        return { hidden: true };
+      }
       const center = hovered || selected;
       if (center) {
-        if (s === center || t === center) { r.color = css("--edge-hi"); r.forceLabel = true; r.zIndex = 2; }
-        else { r.hidden = true; }
-      } else {
-        r.label = "";
-        // big real-data views: in the overview, only draw links inside a PLING subcommunity
-        if (giant && !hits.size && graph.getNodeAttribute(s, "pling_type") !== graph.getNodeAttribute(t, "pling_type")) r.hidden = true;
-        if (hits.size && !(hits.has(s) && hits.has(t))) r.hidden = true;  // with BLAST hits: only links among hits
+        if (a.s === center || a.t === center) {
+          return Object.assign({}, a, { color: COLOR_EDGE_HI, forceLabel: true, zIndex: 2 });
+        }
+        return { hidden: true };
       }
-      return r;
+      if (giant && !hits.size && !a.sameType) return { hidden: true };
+      if (hits.size && !(hits.has(a.s) && hits.has(a.t))) return { hidden: true };
+      return a;
     }
   });
 
-  recolour();
   window.explorer = { graph, renderer };
 
   // ---------- info panel ----------
@@ -352,11 +465,11 @@
   const defaultInfo = info.innerHTML;
 
   function summary() {
-    const comps = new Set(); graph.forEachNode((n, a) => comps.add(a.community));
-    let shown = 0; graph.forEachEdge((e, a) => { if (a.dist <= threshold) shown++; });
+    let shown = 0;
+    edgeDistCounts.forEach((count, dist) => { if (dist <= threshold) shown += count; });
     return `<h3>Dataset</h3><table>
-      <tr><td>Plasmids</td><td>${graph.order}</td></tr>
-      <tr><td>PLING communities</td><td>${comps.size}</td></tr>
+      <tr><td>Plasmids</td><td>${graph.order.toLocaleString()}</td></tr>
+      <tr><td>PLING communities</td><td>${commCounts.size.toLocaleString()}</td></tr>
       <tr><td>Links shown</td><td>${shown.toLocaleString()} of ${graph.size.toLocaleString()} (DCJ ≤ ${threshold})</td></tr>
       ${hasPhri ? PHRI.summaryRows() : ""}</table>
       ${TOPK ? `<p class="hint">This view keeps each plasmid's ${TOPK} closest PLING links so it stays fast; the full count is shown per plasmid.</p>` : ""}`;
@@ -365,13 +478,17 @@
   function showInfo(n) {
     if (!n) {
       if (hits.size) { showHitsPanel(); return; }
-      info.innerHTML = defaultInfo; document.getElementById("summary").innerHTML = summary(); return;
+      info.innerHTML = defaultInfo;
+      document.getElementById("summary").innerHTML = summary();
+      return;
     }
     const a = graph.getNodeAttributes(n);
     const rows = [["PLING type", a.pling_type + (a.hub ? ' <span class="chip">hub plasmid</span>' : "")]];
     if (a.relatives !== undefined) rows.push(["PLING relatives", `${a.relatives.toLocaleString()} with DCJ ≤ 4`]);
-    if (hits.has(n)) { const h = hits.get(n);
-      rows.unshift(["BLAST hit", `<span class="chip">#${h.rank}</span> ${h.identity}% identity, ${h.query_cover}% query cover`]); }
+    if (hits.has(n)) {
+      const h = hits.get(n);
+      rows.unshift(["BLAST hit", `<span class="chip">#${h.rank}</span> ${h.identity}% identity, ${h.query_cover}% query cover`]);
+    }
     metaCols.forEach(c => {
       let v = a[c] ?? "";
       if (c === "amr_genes") v = v ? v.split(";").map(g => `<span class="chip">${esc(g)}</span>`).join("") : '<span class="hint">none detected</span>';
@@ -404,6 +521,13 @@
   const fmtE = e => e === 0 ? "0" : (+e).toExponential(1);
   let lastResult = null;
 
+  // Precompute base accession map once instead of rebuilding per BLAST run
+  const graphBaseAccessions = new Map();
+  graph.forEachNode((n, a) => {
+    graphBaseAccessions.set(n.split(".")[0], n);
+    if (a.accession) graphBaseAccessions.set(String(a.accession).split(".")[0], n);
+  });
+
   function showHitsPanel() {
     const list = [...hits.values()].sort((x, y) => x.rank - y.rank);
     info.innerHTML = `<h2>BLAST hits in the graph (${list.length})</h2>
@@ -424,12 +548,15 @@
     $("blastModal").hidden = true;
     if (focusId) { select(focusId, true); return; }
     select(null);
-    // zoom to fit all hits
     let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
-    hits.forEach((h, id) => { const d = renderer.getNodeDisplayData(id);
-      x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x); y0 = Math.min(y0, d.y); y1 = Math.max(y1, d.y); });
-    if (hits.size) renderer.getCamera().animate({ x: (x0 + x1) / 2, y: (y0 + y1) / 2,
-      ratio: Math.min(1, Math.max(0.02, Math.max(x1 - x0, y1 - y0) * 1.4)) }, { duration: 600 });
+    hits.forEach((h, id) => {
+      const d = renderer.getNodeDisplayData(id);
+      x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x); y0 = Math.min(y0, d.y); y1 = Math.max(y1, d.y);
+    });
+    if (hits.size) renderer.getCamera().animate({
+      x: (x0 + x1) / 2, y: (y0 + y1) / 2,
+      ratio: Math.min(1, Math.max(0.02, Math.max(x1 - x0, y1 - y0) * 1.4))
+    }, { duration: 600 });
   }
 
   function renderResults(res) {
@@ -445,14 +572,16 @@
     $("blastResults").innerHTML = `<div class="row"><button class="btn" id="showHits" type="button">Show all ${inGraph} hits in the graph</button></div>
       <table class="hits"><thead><tr><th>#</th><th>Plasmid</th><th>Identity</th><th>Query cover</th><th>E-value</th><th>Bit score</th>
       <th>Length</th><th>Host</th><th>Country</th><th>Year</th><th>${giant ? "PLING subcommunity" : "PLING community"}</th></tr></thead><tbody>
-      ${res.hits.map((h, i) => { const a = g(h.plasmid);
+      ${res.hits.map((h, i) => {
+        const a = g(h.plasmid);
         return `<tr class="${a ? "go" : ""}" data-id="${esc(h.plasmid)}" title="${a ? "Show in graph" : "Not in the graph"}">
           <td>${i + 1}</td><td>${esc(h.plasmid)}</td><td class="num">${h.identity}%</td><td class="num">${h.query_cover}%</td>
           <td class="num">${fmtE(h.evalue)}</td><td class="num">${h.bitscore.toLocaleString()}</td>
           <td class="num">${(h.subject_length || 0).toLocaleString()}</td>
           <td>${esc(a ? a.host || "" : "")}</td><td>${esc(a ? a.country || "" : "")}</td>
           <td>${esc(a ? (a[dateCol] || "").slice(0, 4) : "")}</td>
-          <td>${a ? esc(giant ? a.pling_type : a.community) : '<span class="hint">not in graph</span>'}</td></tr>`; }).join("")}
+          <td>${a ? esc(giant ? a.pling_type : a.community) : '<span class="hint">not in graph</span>'}</td></tr>`;
+      }).join("")}
       </tbody></table>`;
     $("showHits").onclick = () => showHitsInGraph();
     $("blastResults").querySelectorAll("tr.go").forEach(tr => tr.onclick = () => showHitsInGraph(tr.dataset.id));
@@ -460,20 +589,26 @@
 
   async function runBlast() {
     const seq = $("blastSeq").value;
-    if (!seq.trim()) { $("blastStatus").className = "err"; $("blastStatus").textContent = "Paste a sequence or choose a file first."; return; }
-    
-    $("blastRun").disabled = true; 
+    if (!seq.trim()) {
+      $("blastStatus").className = "err";
+      $("blastStatus").textContent = "Paste a sequence or choose a file first.";
+      return;
+    }
+
+    $("blastRun").disabled = true;
     $("blastStatus").className = "hint";
-    $("blastStatus").textContent = "Submitting sequence to NCBI..."; 
+    $("blastStatus").textContent = "Submitting sequence to NCBI...";
     $("blastResults").innerHTML = "";
-    
+
     try {
+      const maxHits = +$("blastMax").value || 50;
       const putParams = new URLSearchParams({
         CMD: "Put",
         PROGRAM: "blastn",
         MEGABLAST: "on",
         DATABASE: "nt",
         ENTREZ_QUERY: "plasmid[filter]",
+        HITLIST_SIZE: String(maxHits),
         QUERY: seq
       });
 
@@ -482,23 +617,24 @@
         body: putParams,
         headers: { "Content-Type": "application/x-www-form-urlencoded" }
       });
-      
+
       const putText = await putResponse.text();
       const ridMatch = putText.match(/^ *RID *= *(\w+)/m);
-      
       if (!ridMatch) throw new Error("Failed to get Request ID (RID) from NCBI.");
       const rid = ridMatch[1];
 
       let isReady = false;
+      let delay = 4000; // Adaptive polling (starts at 4s instead of waiting 10s immediately)
       while (!isReady) {
         $("blastStatus").textContent = `Searching NCBI databases... (RID: ${rid}). This usually takes 1-3 minutes.`;
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay = Math.min(10000, delay + 2000);
+
         const pollUrl = `/api/ncbi-blast?CMD=Get&FORMAT_OBJECT=SearchInfo&RID=${rid}`;
         const pollResponse = await fetch(pollUrl);
         const pollText = await pollResponse.text();
         const statusMatch = pollText.match(/^ *Status *= *(\w+)/m);
-        
+
         if (statusMatch) {
           const status = statusMatch[1];
           if (status === "FAILED" || status === "UNKNOWN") throw new Error(`NCBI Search failed with status: ${status}`);
@@ -507,7 +643,6 @@
       }
 
       $("blastStatus").textContent = "Search complete. Downloading results...";
-      const maxHits = +$("blastMax").value || 50;
       const resultsUrl = `/api/ncbi-blast?CMD=Get&FORMAT_TYPE=JSON2&HITLIST_SIZE=${maxHits}&RID=${rid}`;
       const resultsResponse = await fetch(resultsUrl);
       const jsonResult = await resultsResponse.json();
@@ -516,32 +651,18 @@
       const ncbiHits = searchObj.hits || [];
       const queryLen = searchObj.query_len;
 
-      // Create a Set of your graph's base accessions to map NCBI hits
-      const graphBaseAccessions = new Map();
-      if (window.PLASMID_GRAPH.node_columns) {
-        const idIndex = window.PLASMID_GRAPH.node_columns.indexOf("id");
-        window.PLASMID_GRAPH.nodes.forEach(row => {
-          const fullId = row.id || "";
-          graphBaseAccessions.set(fullId.split('.')[0], fullId);
-        });
-      } else {
-        window.PLASMID_GRAPH.nodes.forEach(n => {
-          graphBaseAccessions.set(n.id.split('.')[0], n.id);
-        });
-      }
-
       const minId = +$("blastMinId").value || 0;
       const minCov = +$("blastMinCov").value || 0;
 
       const formattedHits = [];
-      ncbiHits.forEach((hit) => {
+      ncbiHits.forEach(hit => {
         const ncbiAccession = hit.description[0].accession;
-        const baseAccession = ncbiAccession.split('.')[0];
+        const baseAccession = ncbiAccession.split(".")[0];
         const graphId = graphBaseAccessions.get(baseAccession);
-        
+
         const hsp = hit.hsps[0];
-        const identity = ((hsp.identity / hsp.align_len) * 100);
-        const queryCover = ((hsp.query_to - hsp.query_from + 1) / queryLen * 100);
+        const identity = (hsp.identity / hsp.align_len) * 100;
+        const queryCover = ((hsp.query_to - hsp.query_from + 1) / queryLen) * 100;
 
         if (identity >= minId && queryCover >= minCov) {
           formattedHits.push({
@@ -556,24 +677,21 @@
         }
       });
 
-      const finalHits = formattedHits.slice(0, maxHits);
-
       const res = {
-        hits: finalHits,
+        hits: formattedHits.slice(0, maxHits),
         query_length: queryLen,
         min_identity: minId,
         min_coverage: minCov,
         before_filter: ncbiHits.length
       };
-      
+
       lastResult = res;
       renderResults(res);
-
     } catch (e) {
-      $("blastStatus").className = "err"; 
+      $("blastStatus").className = "err";
       $("blastStatus").textContent = "BLAST failed: " + e.message;
-    } finally { 
-      $("blastRun").disabled = false; 
+    } finally {
+      $("blastRun").disabled = false;
     }
   }
 
@@ -583,26 +701,30 @@
   $("blastModal").onclick = e => { if (e.target.id === "blastModal") $("blastModal").hidden = true; };
   document.addEventListener("keydown", e => { if (e.key === "Escape") $("blastModal").hidden = true; });
   $("blastRun").onclick = runBlast;
-  $("blastFile").onchange = e => { const f = e.target.files[0]; if (!f) return;
-    const rd = new FileReader(); rd.onload = () => { $("blastSeq").value = rd.result; }; rd.readAsText(f); };
+  $("blastFile").onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader(); rd.onload = () => { $("blastSeq").value = rd.result; }; rd.readAsText(f);
+  };
   $("blastExample").onclick = async () => {
-    const r = await fetch("example_query.fasta"); if (r.ok) $("blastSeq").value = await r.text(); };
+    const r = await fetch("example_query.fasta"); if (r.ok) $("blastSeq").value = await r.text();
+  };
 
   (async () => {
-    try { 
-      const r = await fetch("example_query.fasta", { method: "HEAD" }); 
-      $("blastExample").hidden = !r.ok; 
+    try {
+      const r = await fetch("example_query.fasta", { method: "HEAD" });
+      $("blastExample").hidden = !r.ok;
     } catch (e) {}
   })();
 
   function select(n, move) {
-    selected = n; setFocus(); showInfo(n); renderer.refresh();
+    selected = n; setFocus(); showInfo(n); scheduleRefresh();
     if (n && move) {
-      // centre on the plasmid and zoom so its related plasmids fit on screen
       const p = renderer.getNodeDisplayData(n);
       let span = 0;
-      focus.forEach(m => { const q = renderer.getNodeDisplayData(m);
-        span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y)); });
+      focus.forEach(m => {
+        const q = renderer.getNodeDisplayData(m);
+        span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y));
+      });
       const ratio = focus.size > 1 ? Math.min(1, Math.max(0.01, span * 3)) : (big ? 0.08 : 0.5);
       renderer.getCamera().animate({ x: p.x, y: p.y, ratio }, { duration: 500 });
     }
@@ -610,33 +732,71 @@
 
   renderer.on("clickNode", ({ node }) => select(node, false));
   renderer.on("clickStage", () => select(null));
-  renderer.on("enterNode", ({ node }) => { hovered = node; setFocus(); renderer.refresh(); document.body.style.cursor = "pointer"; });
-  renderer.on("leaveNode", () => { hovered = null; setFocus(); renderer.refresh(); document.body.style.cursor = ""; });
+  renderer.on("enterNode", ({ node }) => {
+    hovered = node; setFocus(); scheduleRefresh(); document.body.style.cursor = "pointer";
+  });
+  renderer.on("leaveNode", () => {
+    hovered = null; setFocus(); scheduleRefresh(); document.body.style.cursor = "";
+  });
 
   // ---------- controls ----------
   colorBy.onchange = recolour;
   document.getElementById("sizeBy").onchange = () => { resize(); recolour(); };
   document.getElementById("gene").onchange = recolour;
   dcj.oninput = () => {
-    threshold = +dcj.value; document.getElementById("dcjVal").textContent = threshold;
-    setFocus(); showInfo(selected); renderer.refresh();
+    threshold = +dcj.value;
+    document.getElementById("dcjVal").textContent = threshold;
+    setFocus();
+    showInfo(selected);
+    scheduleRefresh();
   };
-  if (hasPhri) {   // PHRI
+  if (hasPhri) {
     document.getElementById("phriWrap").hidden = false;
     document.getElementById("minPhri").oninput = e => {
-      minPhri = +e.target.value; document.getElementById("minPhriVal").textContent = minPhri;
-      renderer.refresh();
+      minPhri = +e.target.value;
+      document.getElementById("minPhriVal").textContent = minPhri;
+      updatePhriFilter();
+      scheduleRefresh();
     };
   }
-  document.getElementById("labels").onchange = e => { showAll = e.target.checked; renderer.refresh(); };
+  document.getElementById("labels").onchange = e => { showAll = e.target.checked; scheduleRefresh(); };
 
-  const dl = document.getElementById("plasmid-list"), byAcc = new Map();
+  // OPTIMIZATION 5: Lazy-populate <datalist> on input (max 50 matches) to avoid DOM bloat
+  const dl = document.getElementById("plasmid-list");
+  const searchInput = document.getElementById("search");
+  const byAcc = new Map();
+  const searchIndex = [];
+
   graph.forEachNode((n, a) => {
-    dl.appendChild(new Option(a.accession ? `${n} (${a.accession})` : n, n));
-    if (a.accession) byAcc.set(a.accession.toLowerCase(), n);
+    const acc = a.accession ? String(a.accession) : "";
+    if (acc) byAcc.set(acc.toLowerCase(), n);
+    searchIndex.push({
+      id: n,
+      idLower: n.toLowerCase(),
+      accLower: acc.toLowerCase(),
+      label: acc ? `${n} (${acc})` : n
+    });
   });
-  document.getElementById("search").onchange = e => {
+
+  searchInput.addEventListener("input", e => {
+    const ql = e.target.value.trim().toLowerCase();
+    dl.innerHTML = "";
+    if (ql.length < 2) return;
+    const frag = document.createDocumentFragment();
+    let count = 0;
+    for (let i = 0; i < searchIndex.length && count < 50; i++) {
+      const item = searchIndex[i];
+      if (item.idLower.includes(ql) || item.accLower.includes(ql)) {
+        frag.appendChild(new Option(item.label, item.id));
+        count++;
+      }
+    }
+    dl.appendChild(frag);
+  });
+
+  searchInput.onchange = e => {
     const q = e.target.value.trim(), ql = q.toLowerCase();
+    if (!q) return;
     const hit = graph.hasNode(q) ? q : byAcc.get(ql) || graph.findNode(n => n.toLowerCase().includes(ql));
     if (hit) select(hit, true);
   };
