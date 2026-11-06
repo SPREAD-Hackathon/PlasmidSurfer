@@ -5,7 +5,7 @@
 <h3 align="center">Find a plasmid's relatives, see where they have been, and judge how worried to be.</h3>
 
 <p align="center">
-  <a href="[https://plasmidsurfer.vercel.app/]"><b>Open the website</b></a> ·
+  <a href="[Open the website]"><b>https://plasmidsurfer.vercel.app/</b></a> ·
   <a href="#what-you-can-do-on-the-website">Features</a> ·
   <a href="#how-the-risk-verdict-works">Risk verdict</a> ·
   <a href="#run-it-yourself">Run it yourself</a> ·
