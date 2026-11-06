@@ -74,7 +74,7 @@ spread = 0.80 × lineage value + 0.20 × (1 if hub plasmid else 0)
 
 ```
 overall = 0.45 × AMR + 0.35 × Mobility + 0.20 × Spread       (percentiles, 0–100)
-          + 15 if the community-gap flag fires (capped at 100)
+          + 15 if the potential wave flag fires (capped at 100)
 ```
 
 If one score is missing, the remaining weights are re-normalised.
@@ -90,7 +90,7 @@ If one score is missing, the remaining weights are re-normalised.
 
 **Why a band and not a number.** The scores rest on a hand-written weight table and on PLSDB's sampling. "High concern" is defensible; "73.4 / 100" claims a precision that isn't there.
 
-## 4. The community-gap flag ("potential wave")
+## 4. Potential waves 
 
 This flag asks: has this plasmid's lineage been seen carrying something much worse than it carries now? It is computed **leave-one-out**, meaning over the plasmid's lineage-mates and excluding the plasmid itself. It fires only when **all four** conditions hold:
 
