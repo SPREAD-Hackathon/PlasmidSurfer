@@ -530,7 +530,7 @@
     if (a.accession) graphBaseAccessions.set(String(a.accession).split(".")[0], n);
   });
 
-  const PLSDB_SEQ_URL = "/api/plsdb";
+  const PLSDB_SEQ_URL = "https://ccb-microbe.cs.uni-saarland.de/plsdb2025/api/sequence/";
 
   function showHitsPanel() {
     const list = [...hits.values()].sort((x, y) => x.rank - y.rank);
@@ -610,17 +610,38 @@
     }
 
     if (!raw.startsWith(">")) raw = ">query_plasmid\n" + raw;
+
     const queryLen = raw
       .split(/\r?\n/)
       .filter(line => !line.startsWith(">"))
       .join("")
       .replace(/[^A-Za-z]/g, "").length;
 
-    const methodEl = $("blastMethod");
-    const searchType = methodEl ? methodEl.value : (queryLen < 3000 ? "blastn" : "mash_dist");
+    const searchType = $("blastMethod").value;
     const maxHits = +$("blastMax").value || 50;
     const minId = +$("blastMinId").value || 0;
     const minCov = +$("blastMinCov").value || 0;
+
+    // PLSDB BLASTn accepts at most 10 records, each 100–5000 bp.
+    if (searchType === "blastn") {
+      const records = raw.split(/^>/m).filter(x => x.trim());
+      if (records.length > 10) {
+        $("blastStatus").className = "err";
+        $("blastStatus").textContent =
+          "BLASTn accepts a maximum of 10 FASTA records per submission.";
+        return;
+      }
+      const lengths = records.map(record =>
+        (record.split(/\r?\n/).slice(1).join("").replace(/[^A-Za-z]/g, "")).length
+      );
+      const invalid = lengths.findIndex(n => n < 100 || n > 5000);
+      if (invalid !== -1) {
+        $("blastStatus").className = "err";
+        $("blastStatus").textContent =
+          `BLASTn record ${invalid + 1} is ${lengths[invalid]} bp. Each record must be 100–5000 bp. Use Mash for whole plasmids.`;
+        return;
+      }
+    }
 
     $("blastRun").disabled = true;
     $("blastStatus").className = "hint";
@@ -629,54 +650,124 @@
 
     try {
       const formData = new FormData();
-      // PLSDB expects 'file' for the uploaded FASTA blob
-      formData.append("file", new Blob([raw], { type: "text/plain" }), "query.fasta");
+
+      // These names and parameters match the official PLSDB API wrapper.
+      formData.append(
+        "fasta_file",
+        new Blob([raw], { type: "text/plain" }),
+        "query.fasta"
+      );
       formData.append("search_type", searchType);
 
-      const postResp = await fetch(PLSDB_SEQ_URL, { method: "POST", body: formData });
-      if (!postResp.ok) {
-        const errText = await postResp.text();
-        throw new Error(`PLSDB submission returned HTTP ${postResp.status}: ${errText}`);
+      // Apply the user's BLASTn thresholds on the PLSDB server.
+      if (searchType === "blastn") {
+        formData.append("blastn_min_i", String(minId));
+        formData.append("blastn_min_c", String(minCov));
       }
-      
-      const postData = await postResp.json();
-      const jobId = postData.job_id;
-      if (!jobId) throw new Error(postData.label || postData.message || "No job_id returned from PLSDB.");
 
-      let rows = null;
+      // Submit directly to the official PLSDB API.
+      let response = await fetch(PLSDB_SEQ_URL, {
+        method: "POST",
+        body: formData
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`PLSDB submission HTTP ${response.status}: ${body.slice(0, 500)}`);
+      }
+
+      let jobData = await response.json();
+      if (jobData.label === "invalid post") {
+        throw new Error(`PLSDB rejected the submission: ${jobData.error || "invalid request"}`);
+      }
+      if (["failed", "error", "no job id"].includes(String(jobData.label || "").toLowerCase())) {
+        throw new Error(`PLSDB job failed: ${jobData.label}`);
+      }
+
+      const jobId = jobData.job_id;
+      if (!jobId && jobData.label !== "finished") {
+        throw new Error(`PLSDB did not return a job ID. Response: ${JSON.stringify(jobData).slice(0, 400)}`);
+      }
+
       const startTime = Date.now();
-      while (!rows) {
-        await new Promise(r => setTimeout(r, 1500));
+      const timeoutMs = 10 * 60 * 1000;
+
+      while (jobData.label !== "finished") {
+        if (Date.now() - startTime > timeoutMs) {
+          throw new Error("PLSDB search timed out after 10 minutes.");
+        }
+
         const elapsed = Math.round((Date.now() - startTime) / 1000);
-        $("blastStatus").textContent = `Searching PLSDB (${searchType}, ${elapsed}s)...`;
+        $("blastStatus").textContent =
+          `Searching PLSDB (${searchType}, ${elapsed}s)...`;
 
-        const pollResp = await fetch(`${PLSDB_SEQ_URL}?job_id=${encodeURIComponent(jobId)}`);
-        if (!pollResp.ok) throw new Error(`PLSDB polling failed (HTTP ${pollResp.status})`);
-        const pollData = await pollResp.json();
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
-        if (Array.isArray(pollData)) {
-          rows = pollData;
-        } else if (Array.isArray(pollData.data)) {
-          rows = pollData.data;
-        } else if (Array.isArray(pollData.results)) {
-          rows = pollData.results;
-        } else {
-          const state = String(pollData.label || pollData.status || "").toLowerCase();
-          if (state.includes("fail") || state.includes("error") || state.includes("invalid")) {
-            throw new Error(`PLSDB job failed: ${pollData.label || pollData.status}`);
-          }
+        response = await fetch(
+          `${PLSDB_SEQ_URL}?job_id=${encodeURIComponent(jobId)}`
+        );
+
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(`PLSDB polling HTTP ${response.status}: ${body.slice(0, 300)}`);
+        }
+
+        jobData = await response.json();
+
+        if (jobData.label === "invalid post") {
+          throw new Error(`PLSDB rejected the job: ${jobData.error || "invalid request"}`);
+        }
+        if (["failed", "error", "no job id"].includes(String(jobData.label || "").toLowerCase())) {
+          throw new Error(`PLSDB job failed: ${jobData.label}`);
         }
       }
 
+      // PLSDB returns a pandas DataFrame serialized with orient="split":
+      // { columns: [...], index: [...], data: [[...], ...] }
+      let resultTable = jobData.results;
+      if (typeof resultTable === "string") {
+        resultTable = JSON.parse(resultTable);
+      }
+
+      let rows = [];
+      if (Array.isArray(resultTable)) {
+        rows = resultTable;
+      } else if (resultTable && Array.isArray(resultTable.data) &&
+                 Array.isArray(resultTable.columns)) {
+        rows = resultTable.data.map(values => {
+          const row = {};
+          resultTable.columns.forEach((column, i) => {
+            row[column] = values[i];
+          });
+          return row;
+        });
+      } else if (resultTable && Array.isArray(resultTable.results)) {
+        rows = resultTable.results;
+      } else {
+        throw new Error(
+          `PLSDB finished but returned an unrecognized results format: ${JSON.stringify(jobData).slice(0, 500)}`
+        );
+      }
+
       const formattedHits = [];
+
       rows.forEach(row => {
-        const rawAcc = String(row.NUCCORE_ACC || row.ACCESSION || row.accession || row.sseqid || "");
+        const rawAcc = String(
+          row.NUCCORE_ACC || row.ACCESSION || row.accession ||
+          row.sseqid || row.subject_accession || ""
+        );
         if (!rawAcc) return;
+
         const baseAcc = rawAcc.split(".")[0];
         const graphId = graphBaseAccessions.get(baseAcc);
         const nodeAttrs = graphId ? graph.getNodeAttributes(graphId) : null;
 
-        let identity = 0, queryCover = 100, evalue = 0, bitscore = 0, mashDist = "", sharedHashes = "";
+        let identity = 0;
+        let queryCover = 100;
+        let evalue = 0;
+        let bitscore = 0;
+        let mashDist = "";
+        let sharedHashes = "";
 
         if (searchType === "blastn") {
           identity = +(row.pident ?? row.identity ?? 0);
@@ -684,7 +775,8 @@
           evalue = +(row.evalue ?? 0);
           bitscore = +(row.bitscore ?? row.bit_score ?? 0);
         } else {
-          const dist = +(row.distance ?? row.mash_dist ?? (row.identity !== undefined ? 1 - +row.identity : 0));
+          const dist = +(row.distance ?? row.mash_dist ??
+            (row.identity !== undefined ? 1 - +row.identity : 0));
           mashDist = dist.toFixed(4);
           identity = row.identity !== undefined
             ? (+row.identity <= 1 ? +row.identity * 100 : +row.identity)
@@ -692,12 +784,14 @@
           evalue = +(row.pvalue ?? row.p_value ?? 0);
           sharedHashes = String(row.shared_hashes || row["shared-hashes"] || "");
           if (sharedHashes.includes("/")) {
-            const [sh, tot] = sharedHashes.split("/").map(Number);
-            if (tot > 0) queryCover = (sh / tot) * 100;
+            const [shared, total] = sharedHashes.split("/").map(Number);
+            if (total > 0) queryCover = (shared / total) * 100;
           }
           bitscore = Math.round(queryCover * 10) / 10;
         }
 
+        // For Mash, apply identity/coverage filters locally because the PLSDB
+        // Mash API uses different parameters (distance/identity/p-value).
         if (identity >= minId && queryCover >= minCov) {
           formattedHits.push({
             plasmid: graphId || rawAcc,
@@ -708,14 +802,19 @@
             mash_dist: mashDist,
             evalue,
             bitscore,
-            subject_length: +(row.NUCCORE_Length || row.LENGTH || row.length || (nodeAttrs && nodeAttrs.length_bp) || 0),
+            subject_length: +(
+              row.NUCCORE_Length || row.LENGTH || row.length ||
+              (nodeAttrs && nodeAttrs.length_bp) || 0
+            ),
             host: row.TAXONOMY_species || row.BIOSAMPLE_host || "",
             country: row.LOC_country || ""
           });
         }
       });
 
-      formattedHits.sort((a, b) => (+b.identity - +a.identity) || (+b.bitscore - +a.bitscore));
+      formattedHits.sort((a, b) =>
+        (+b.identity - +a.identity) || (+b.bitscore - +a.bitscore)
+      );
 
       const res = {
         method: searchType,
@@ -728,9 +827,14 @@
 
       lastResult = res;
       renderResults(res);
+
     } catch (e) {
       $("blastStatus").className = "err";
-      $("blastStatus").textContent = "PLSDB search failed: " + e.message;
+      const message = String(e && e.message ? e.message : e);
+      $("blastStatus").textContent =
+        message.includes("Failed to fetch") || message.includes("NetworkError")
+          ? "Direct connection to PLSDB was blocked by the browser (likely CORS or network policy). This confirms that option A is unavailable; a Vercel serverless proxy would be needed. Details: " + message
+          : "PLSDB search failed: " + message;
     } finally {
       $("blastRun").disabled = false;
     }
