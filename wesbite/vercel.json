@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/ncbi-blast",
+      "destination": "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi"
+    }
+  ]
+}

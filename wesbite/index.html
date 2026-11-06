@@ -471,12 +471,13 @@
       const putParams = new URLSearchParams({
         CMD: "Put",
         PROGRAM: "blastn",
+        MEGABLAST: "on",
         DATABASE: "nt",
         ENTREZ_QUERY: "plasmid[filter]",
         QUERY: seq
       });
 
-      const putResponse = await fetch("https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi", {
+      const putResponse = await fetch("/api/ncbi-blast", {
         method: "POST",
         body: putParams,
         headers: { "Content-Type": "application/x-www-form-urlencoded" }
@@ -493,7 +494,7 @@
         $("blastStatus").textContent = `Searching NCBI databases... (RID: ${rid}). This usually takes 1-3 minutes.`;
         await new Promise(resolve => setTimeout(resolve, 10000));
         
-        const pollUrl = `https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi?CMD=Get&FORMAT_OBJECT=SearchInfo&RID=${rid}`;
+        const pollUrl = `/api/ncbi-blast?CMD=Get&FORMAT_OBJECT=SearchInfo&RID=${rid}`;
         const pollResponse = await fetch(pollUrl);
         const pollText = await pollResponse.text();
         const statusMatch = pollText.match(/^ *Status *= *(\w+)/m);
@@ -506,7 +507,8 @@
       }
 
       $("blastStatus").textContent = "Search complete. Downloading results...";
-      const resultsUrl = `https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi?CMD=Get&FORMAT_TYPE=JSON2&RID=${rid}`;
+      const maxHits = +$("blastMax").value || 50;
+      const resultsUrl = `/api/ncbi-blast?CMD=Get&FORMAT_TYPE=JSON2&HITLIST_SIZE=${maxHits}&RID=${rid}`;
       const resultsResponse = await fetch(resultsUrl);
       const jsonResult = await resultsResponse.json();
 
@@ -530,7 +532,6 @@
 
       const minId = +$("blastMinId").value || 0;
       const minCov = +$("blastMinCov").value || 0;
-      const maxHits = +$("blastMax").value || 50;
 
       const formattedHits = [];
       ncbiHits.forEach((hit) => {
