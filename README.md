@@ -171,7 +171,7 @@ python3 -m http.server 8000
 | Christian Owusu-Nyantaki | [reiychris](https://github.com/Reiychris) | |
 | George Kitundu | [eorgekit](https://github.com/EorgeKit) | |
 
-Developed at the **[SPREAD Hackathon, place, date]**.
+Developed at the **[SPREAD Hackathon, Copenhagen, 06-Nov-2026]**.
 
 ## Acknowledgments
 
