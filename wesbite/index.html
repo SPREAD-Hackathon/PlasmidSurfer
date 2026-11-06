@@ -601,6 +601,44 @@
     $("blastResults").querySelectorAll("tr.go").forEach(tr => tr.onclick = () => showHitsInGraph(tr.dataset.id));
   }
 
+  // Parse JSON when possible, but preserve plain-text/HTML error responses too.
+  async function readPlsdbResponse(response, stage) {
+    const bodyText = await response.text();
+    let data;
+
+    try {
+      data = bodyText ? JSON.parse(bodyText) : {};
+    } catch (_) {
+      data = { raw_response: bodyText };
+    }
+
+    if (!response.ok) {
+      const detail = typeof data === "string" ? data :
+        (data.error || data.message || data.detail || data.raw_response || JSON.stringify(data));
+      throw new Error(`${stage} returned HTTP ${response.status} ${response.statusText}: ${String(detail).slice(0, 2000)}`);
+    }
+
+    return data;
+  }
+
+  function plsdbJobError(jobData, stage) {
+    const label = String(jobData && (jobData.label || jobData.status || jobData.state) || "").toLowerCase();
+    const failedLabels = ["failed", "error", "no job id", "invalid post", "failure"];
+    if (!failedLabels.includes(label)) return;
+
+    // Keep the complete server payload in the console. The visible error includes
+    // the most useful fields, plus a bounded JSON representation for diagnosis.
+    console.error(`PLSDB ${stage} failure; complete response:`, jobData);
+    const detail = jobData.error || jobData.message || jobData.detail ||
+      jobData.reason || jobData.description || jobData.stderr || jobData.traceback;
+    const payload = JSON.stringify(jobData, null, 2);
+    throw new Error(
+      `PLSDB ${stage} failed (label: ${label})` +
+      (detail ? `: ${String(detail)}` : ". No error message was supplied by the API.") +
+      `\nFull response: ${payload.slice(0, 5000)}`
+    );
+  }
+
   async function runBlast() {
     let raw = $("blastSeq").value.trim();
     if (!raw) {
@@ -650,8 +688,6 @@
 
     try {
       const formData = new FormData();
-
-      // These names and parameters match the official PLSDB API wrapper.
       formData.append(
         "fasta_file",
         new Blob([raw], { type: "text/plain" }),
@@ -659,66 +695,56 @@
       );
       formData.append("search_type", searchType);
 
-      // Apply the user's BLASTn thresholds on the PLSDB server.
       if (searchType === "blastn") {
         formData.append("blastn_min_i", String(minId));
         formData.append("blastn_min_c", String(minCov));
       }
 
-      // Submit directly to the official PLSDB API.
+      // Submit through the same-origin Vercel serverless proxy.
       let response = await fetch(PLSDB_SEQ_URL, {
         method: "POST",
         body: formData
       });
-
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`PLSDB submission HTTP ${response.status}: ${body.slice(0, 500)}`);
-      }
-
-      let jobData = await response.json();
-      if (jobData.label === "invalid post") {
-        throw new Error(`PLSDB rejected the submission: ${jobData.error || "invalid request"}`);
-      }
-      if (["failed", "error", "no job id"].includes(String(jobData.label || "").toLowerCase())) {
-        throw new Error(`PLSDB job failed: ${jobData.label}`);
-      }
+      let jobData = await readPlsdbResponse(response, "PLSDB submission");
+      plsdbJobError(jobData, "submission");
 
       const jobId = jobData.job_id;
-      if (!jobId && jobData.label !== "finished") {
-        throw new Error(`PLSDB did not return a job ID. Response: ${JSON.stringify(jobData).slice(0, 400)}`);
+      if (!jobId && String(jobData.label || "").toLowerCase() !== "finished") {
+        console.error("PLSDB submission returned no job ID:", jobData);
+        throw new Error(
+          "PLSDB did not return a job ID. Full response: " +
+          JSON.stringify(jobData, null, 2).slice(0, 5000)
+        );
       }
 
       const startTime = Date.now();
       const timeoutMs = 10 * 60 * 1000;
 
-      while (jobData.label !== "finished") {
+      while (String(jobData.label || "").toLowerCase() !== "finished") {
         if (Date.now() - startTime > timeoutMs) {
-          throw new Error("PLSDB search timed out after 10 minutes.");
+          throw new Error(`PLSDB search timed out after ${timeoutMs / 60000} minutes (job ${jobId}).`);
         }
 
         const elapsed = Math.round((Date.now() - startTime) / 1000);
         $("blastStatus").textContent =
-          `Searching PLSDB (${searchType}, ${elapsed}s)...`;
+          `Searching PLSDB (${searchType}, ${elapsed}s; job ${jobId})...`;
 
         await new Promise(resolve => setTimeout(resolve, 3000));
 
         response = await fetch(
-          `${PLSDB_SEQ_URL}?job_id=${encodeURIComponent(jobId)}`
+          `${PLSDB_SEQ_URL}?job_id=${encodeURIComponent(jobId)}`,
+          { method: "GET", headers: { Accept: "application/json" } }
         );
+        jobData = await readPlsdbResponse(response, `PLSDB polling (job ${jobId})`);
+        plsdbJobError(jobData, `job ${jobId}`);
 
-        if (!response.ok) {
-          const body = await response.text();
-          throw new Error(`PLSDB polling HTTP ${response.status}: ${body.slice(0, 300)}`);
-        }
-
-        jobData = await response.json();
-
-        if (jobData.label === "invalid post") {
-          throw new Error(`PLSDB rejected the job: ${jobData.error || "invalid request"}`);
-        }
-        if (["failed", "error", "no job id"].includes(String(jobData.label || "").toLowerCase())) {
-          throw new Error(`PLSDB job failed: ${jobData.label}`);
+        const state = String(jobData.label || jobData.status || "").toLowerCase();
+        if (state && !["finished", "running", "pending", "queued", "processing", "started"].includes(state)) {
+          console.error("Unexpected PLSDB job status; complete response:", jobData);
+          throw new Error(
+            `Unexpected PLSDB job status: ${state}. Full response: ` +
+            JSON.stringify(jobData, null, 2).slice(0, 5000)
+          );
         }
       }
 
@@ -726,7 +752,11 @@
       // { columns: [...], index: [...], data: [[...], ...] }
       let resultTable = jobData.results;
       if (typeof resultTable === "string") {
-        resultTable = JSON.parse(resultTable);
+        try {
+          resultTable = JSON.parse(resultTable);
+        } catch (error) {
+          throw new Error(`PLSDB returned results as invalid JSON: ${error.message}. Response: ${String(jobData.results).slice(0, 2000)}`);
+        }
       }
 
       let rows = [];
@@ -744,8 +774,9 @@
       } else if (resultTable && Array.isArray(resultTable.results)) {
         rows = resultTable.results;
       } else {
+        console.error("Unrecognized successful PLSDB response:", jobData);
         throw new Error(
-          `PLSDB finished but returned an unrecognized results format: ${JSON.stringify(jobData).slice(0, 500)}`
+          `PLSDB marked the job finished but returned an unrecognized results format. Full response: ${JSON.stringify(jobData, null, 2).slice(0, 5000)}`
         );
       }
 
@@ -790,8 +821,6 @@
           bitscore = Math.round(queryCover * 10) / 10;
         }
 
-        // For Mash, apply identity/coverage filters locally because the PLSDB
-        // Mash API uses different parameters (distance/identity/p-value).
         if (identity >= minId && queryCover >= minCov) {
           formattedHits.push({
             plasmid: graphId || rawAcc,
@@ -829,12 +858,10 @@
       renderResults(res);
 
     } catch (e) {
+      console.error("PLSDB search error:", e);
       $("blastStatus").className = "err";
-      const message = String(e && e.message ? e.message : e);
       $("blastStatus").textContent =
-        message.includes("Failed to fetch") || message.includes("NetworkError")
-          ? "Direct connection to PLSDB was blocked by the browser (likely CORS or network policy). This confirms that option A is unavailable; a Vercel serverless proxy would be needed. Details: " + message
-          : "PLSDB search failed: " + message;
+        "PLSDB search failed: " + String(e && e.message ? e.message : e);
     } finally {
       $("blastRun").disabled = false;
     }
