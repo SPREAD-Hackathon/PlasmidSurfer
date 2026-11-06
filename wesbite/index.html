@@ -629,22 +629,16 @@
 
     try {
       const formData = new FormData();
-      formData.append("fasta_file", new Blob([raw], { type: "text/plain" }), "query.fasta");
+      // PLSDB expects 'file' for the uploaded FASTA blob
+      formData.append("file", new Blob([raw], { type: "text/plain" }), "query.fasta");
       formData.append("search_type", searchType);
 
-      if (searchType === "mash_dist") {
-        formData.append("mash_max_v", "0.1");
-        formData.append("mash_max_d", minId > 0 ? String(Math.max(0.01, (100 - minId) / 100)) : "0.2");
-      } else if (searchType === "mash_screen") {
-        formData.append("mash_max_v", "0.1");
-        formData.append("mash_min_i", minId > 0 ? String(minId / 100) : "0.9");
-      } else if (searchType === "blastn") {
-        if (minId > 0) formData.append("blastn_min_i", String(minId));
-        if (minCov > 0) formData.append("blastn_min_c", String(minCov));
-      }
-
       const postResp = await fetch(PLSDB_SEQ_URL, { method: "POST", body: formData });
-      if (!postResp.ok) throw new Error(`PLSDB submission returned HTTP ${postResp.status}`);
+      if (!postResp.ok) {
+        const errText = await postResp.text();
+        throw new Error(`PLSDB submission returned HTTP ${postResp.status}: ${errText}`);
+      }
+      
       const postData = await postResp.json();
       const jobId = postData.job_id;
       if (!jobId) throw new Error(postData.label || postData.message || "No job_id returned from PLSDB.");
