@@ -1,8 +1,8 @@
 {
   "rewrites": [
     {
-      "source": "/api/ncbi-blast",
-      "destination": "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi"
+      "source": "/api/plsdb",
+      "destination": "https://ccb-microbe.cs.uni-saarland.de/plsdb2025/api/sequence"
     }
   ]
 }
