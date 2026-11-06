@@ -34,6 +34,12 @@ Paste a plasmid sequence and PlasmidSurfer searches **PLSDB**. It lights up the 
 > - which countries and host species that family has reached;
 > - whether its relatives have been seen carrying something worse.
 
+**Caveats to keep in mind**
+
+- PLSDB reflects what has been sequenced, not everything that circulates. High-income countries and clinical isolates are over-represented.
+- PLSDB has no true collection date. "Year" is the year the sequence record was created in NCBI, which lags isolation.
+- The verdict is a genotypic indicator for triage. It is not a clinical prediction.
+
 ---
 
 ## What you can do on the website
@@ -94,12 +100,6 @@ Spread gets the lowest weight on purpose. It describes the lineage rather than t
 | MOB-suite | Replicon, relaxase, MPF, oriT and predicted mobility. |
 | AMRFinderPlus / Kleborate | AMR genes and resistance tiers. |
 | [Natural Earth](https://www.naturalearthdata.com/) via `world-atlas` | World map outline (public domain). |
-
-**Caveats to keep in mind**
-
-- PLSDB reflects what has been sequenced, not everything that circulates. High-income countries and clinical isolates are over-represented.
-- PLSDB has no true collection date. "Year" is the year the sequence record was created in NCBI, which lags isolation.
-- The verdict is a genotypic indicator for triage. It is not a clinical prediction.
 
 ---
 
