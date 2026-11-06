@@ -123,6 +123,15 @@
   .dialog { background: var(--panel); border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.18);
             width: 100%; max-width: 980px; max-height: calc(100vh - 96px); overflow: auto; padding: 20px 22px; }
   .dialog h2 { margin: 0 0 4px; font-size: 17px; }
+  #mapModal .dialog { width: min(1180px, 96vw); }
+  .mapwrap { display: flex; gap: 16px; margin-top: 10px; align-items: flex-start; flex-wrap: wrap; }
+  #worldSvg { flex: 1 1 560px; min-width: 0; width: 100%; height: auto; background: #f3f7f9; border: 1px solid var(--border); border-radius: 8px; }
+  #worldSvg .land { fill: #dfe3e6; stroke: #fff; stroke-width: .5; }
+  #worldSvg .dot { fill: var(--accent); fill-opacity: .55; stroke: #0a6f5c; stroke-width: 1; cursor: pointer; }
+  #worldSvg .dot:hover, #worldSvg .dot.on { fill-opacity: .85; stroke-width: 2; }
+  #worldSvg .n { font: 600 14px system-ui, sans-serif; fill: #0b3d34; text-anchor: middle; pointer-events: none; }
+  #mapList { flex: 0 1 280px; max-height: 460px; overflow: auto; font-size: 13px; }
+  #mapList li { cursor: pointer; }
   .dialog .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
   #blastSeq { width: 100%; height: 150px; margin-top: 12px; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
               resize: vertical; }
@@ -204,10 +213,23 @@
   </div>
 </div>
 
+<div id="mapModal" class="modal" hidden>
+  <div class="dialog" role="dialog" aria-labelledby="mapTitle">
+    <button class="x" id="mapClose" aria-label="Close">×</button>
+    <h2 id="mapTitle">Search hits on the world map</h2>
+    <p class="hint" id="mapHint" style="margin:0"></p>
+    <div class="mapwrap">
+      <svg id="worldSvg" viewBox="0 15 1000 400" role="img" aria-label="World map of search hits by country"></svg>
+      <div id="mapList"></div>
+    </div>
+  </div>
+</div>
+
 <script src="lib/graphology.umd.min.js"></script>
 <script src="lib/graphology-library.min.js"></script>
 <script src="lib/sigma.min.js"></script>
 <script src="data.js"></script>
+<script src="world.js"></script><!-- world outline + country centres for the hits map -->
 <script>
 (function () {
   const DATA = window.PLASMID_GRAPH;
@@ -783,12 +805,14 @@
     info.innerHTML = `<h2>PLSDB hits in the graph (${list.length})</h2>
       <p class="hint">Hits are highlighted; everything else is greyed out. Click a hit to see its details and PLING relatives.</p>
       <p><button class="btn ghost" id="clearHits" type="button">Clear PLSDB hits</button>
-         <button class="btn ghost" id="reopenBlast" type="button">Results table</button></p>
+         <button class="btn ghost" id="reopenBlast" type="button">Results table</button>
+         <button class="btn ghost" id="openMap" type="button">World map</button></p>
       <ul class="nb">${list.map(h => `<li data-id="${esc(h.plasmid)}"><span><span class="chip">#${h.rank}</span> ${esc(h.plasmid)}<br>
         <span class="hint" style="font-size:12px">${esc(graph.getNodeAttribute(h.plasmid, "host") || h.host || "")} · ${esc(graph.getNodeAttribute(h.plasmid, "community") || "")}</span></span>
         <span class="d">${h.identity}% · ${h.query_cover}%</span></li>`).join("")}</ul>`;
     $("clearHits").onclick = () => { hits = new Map(); select(null); };
     $("reopenBlast").onclick = openBlast;
+    $("openMap").onclick = showHitsMap;
     info.querySelectorAll("li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id, true));
   }
 
@@ -837,7 +861,8 @@
       (hubsHidden ? ` · ${hubsHidden} hub plasmid${hubsHidden > 1 ? "s" : ""} hidden` : "") + ".";
     if (!res.hits.length) { $("blastResults").innerHTML = ""; return; }
     const g = id => graph.hasNode(id) ? graph.getNodeAttributes(id) : null;
-    $("blastResults").innerHTML = `<div class="row"><button class="btn" id="showHits" type="button">Show all ${inGraph} hits in the graph</button></div>
+    $("blastResults").innerHTML = `<div class="row"><button class="btn" id="showHits" type="button">Show all ${inGraph} hits in the graph</button>
+      <button class="btn ghost" id="mapHits" type="button">Show hits on world map</button></div>
       <table class="hits"><thead><tr>
         <th>#</th><th>Plasmid</th><th>Identity</th>
         <th>${isMash ? "Shared hashes" : "Query cover"}</th>
@@ -860,6 +885,7 @@
           <td>${a ? esc(a.community) : '<span class="hint">not in graph</span>'}</td></tr>`;
       }).join("")}
       </tbody></table>`;
+    $("mapHits").onclick = e => { e.stopPropagation(); showHitsMap(); };
     $("showHits").onclick = e => {
       e.stopPropagation();
       showHitsInGraph();
@@ -1158,12 +1184,68 @@
     }
   }
 
+  // ---------- WORLD MAP OF HITS ----------
+  // One dot per country, at the centre of its largest landmass. Dot AREA is
+  // proportional to the number of hits from that country (so the eye reads it
+  // as a count). Country comes from the graph metadata, else from PLSDB's reply.
+  const SVGNS = "http://www.w3.org/2000/svg";
+  let mapCountry = null;
+  function hitCountry(h) {
+    const a = h.in_graph && graph.hasNode(h.plasmid) ? graph.getNodeAttributes(h.plasmid) : null;
+    return String((a && a.country) || h.country || "").trim();
+  }
+  function showHitsMap() {
+    if (!lastResult || !window.WORLD_MAP) return;
+    const W = window.WORLD_MAP, svg = $("worldSvg");
+    const list = shownHits(lastResult).map((h, i) => Object.assign({ rank: i + 1 }, h));
+    const by = new Map(); let unknown = 0, unplaced = [];
+    list.forEach(h => { const c = hitCountry(h);
+      if (!c) { unknown++; return; }
+      if (!W.centres[c]) { unplaced.push(c); return; }
+      if (!by.has(c)) by.set(c, []); by.get(c).push(h); });
+    const max = Math.max(1, ...[...by.values()].map(v => v.length));
+    svg.innerHTML = `<path class="land" d="${W.path}"></path>`;
+    [...by.entries()].sort((a, b) => b[1].length - a[1].length).forEach(([c, hs]) => {
+      const [x, y] = W.centres[c], r = 6 + 34 * Math.sqrt(hs.length / max);
+      const g = document.createElementNS(SVGNS, "g");
+      g.innerHTML = `<circle class="dot" cx="${x}" cy="${y}" r="${r}"><title>${esc(c)}: ${hs.length} hit${hs.length > 1 ? "s" : ""}</title></circle>` +
+        (r >= 11 ? `<text class="n" x="${x}" y="${y + 5}">${hs.length}</text>` : "");
+      g.querySelector("circle").onclick = () => mapListCountry(c, hs);
+      g.dataset.c = c; svg.appendChild(g);
+    });
+    const placed = list.length - unknown - unplaced.length;
+    $("mapHint").textContent = `${placed} of ${list.length} hits placed in ${by.size} countr${by.size === 1 ? "y" : "ies"}` +
+      (unknown ? ` · ${unknown} with no country recorded` : "") +
+      (unplaced.length ? ` · ${unplaced.length} with a country name not on the map (${[...new Set(unplaced)].join(", ")})` : "") +
+      ". Dot area = number of hits. Click a dot to list its plasmids.";
+    mapCountry = null;
+    $("mapList").innerHTML = `<p class="hint">Countries, most hits first:</p><ul class="nb">${[...by.entries()].sort((a, b) => b[1].length - a[1].length)
+      .map(([c, hs]) => `<li data-c="${esc(c)}"><span>${esc(c)}</span><span class="d">${hs.length}</span></li>`).join("")}</ul>`;
+    $("mapList").querySelectorAll("li[data-c]").forEach(li => li.onclick = () => mapListCountry(li.dataset.c, by.get(li.dataset.c)));
+    $("blastModal").hidden = true; $("mapModal").hidden = false;
+  }
+  function mapListCountry(c, hs) {
+    mapCountry = c;
+    $("worldSvg").querySelectorAll("g").forEach(g => g.querySelector("circle").classList.toggle("on", g.dataset.c === c));
+    $("mapList").innerHTML = `<p><button class="btn ghost" id="mapBack" type="button">All countries</button></p>
+      <h3 style="margin:6px 0">${esc(c)} · ${hs.length} hit${hs.length > 1 ? "s" : ""}</h3>
+      <ul class="nb">${hs.map(h => `<li data-id="${esc(h.plasmid)}" data-g="${h.in_graph ? 1 : 0}"><span><span class="chip">#${h.rank}</span> ${esc(h.plasmid)}<br>
+        <span class="hint" style="font-size:12px">${h.in_graph ? esc(graph.getNodeAttribute(h.plasmid, "community") || "") : "not in graph"}</span></span>
+        <span class="d">${h.identity}%</span></li>`).join("")}</ul>`;
+    $("mapBack").onclick = showHitsMap;
+    $("mapList").querySelectorAll("li[data-id]").forEach(li => { if (li.dataset.g === "1") li.onclick = () => {
+      $("mapModal").hidden = true; showHitsInGraph(li.dataset.id); }; });
+  }
+  $("mapClose").onclick = () => { $("mapModal").hidden = true; };
+  $("mapModal").onclick = e => { if (e.target.id === "mapModal") $("mapModal").hidden = true; };
+
   function openBlast() { $("blastModal").hidden = false; if (!lastResult) $("blastSeq").focus(); }
   $("blastBtn").onclick = openBlast;
   $("blastClose").onclick = () => { $("blastModal").hidden = true; };
   $("blastModal").onclick = e => { if (e.target.id === "blastModal") $("blastModal").hidden = true; };
   document.addEventListener("keydown", e => {
     if (e.key !== "Escape") return;
+    if (!$("mapModal").hidden) { $("mapModal").hidden = true; return; }
     if (!$("blastModal").hidden) { $("blastModal").hidden = true; return; }
     if (groupSel !== null) selectGroup(groupSel);     // second Escape clears the legend group
   });
