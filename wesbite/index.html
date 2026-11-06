@@ -530,7 +530,7 @@
     if (a.accession) graphBaseAccessions.set(String(a.accession).split(".")[0], n);
   });
 
-  const PLSDB_SEQ_URL = "https://ccb-microbe.cs.uni-saarland.de/plsdb2025/api/sequence";
+  const PLSDB_SEQ_URL = "/api/plsdb";
 
   function showHitsPanel() {
     const list = [...hits.values()].sort((x, y) => x.rank - y.rank);
