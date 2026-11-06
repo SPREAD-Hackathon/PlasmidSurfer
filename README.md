@@ -177,10 +177,9 @@ Developed at the **[SPREAD Hackathon, place, date]**.
 
 <!-- Funders, organisers, mentors, data providers -->
 
-- [Hackathon organisers / funders]
-- The PLSDB team, for the database and the public sequence-search API
-- The PLING developers
-- [Mentors, institutions, compute providers]
+- [The SPREAD Hackathon organisers](https://en.ssi.dk/surveillance-and-preparedness/international-coorporation/spread) 
+- [The PLSDB database](https://ccb-microbe.cs.uni-saarland.de/plsdb2025/)
+- [PLING developers](https://github.com/iqbal-lab-org/pling)
 
 ## How to cite
 
