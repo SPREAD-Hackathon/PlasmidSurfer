@@ -194,6 +194,8 @@
         <input id="blastMinId" type="number" min="0" max="100" step="0.5" value="0" style="width:64px"> %</label>
       <label style="color:var(--muted);font-size:13px">Min query cover
         <input id="blastMinCov" type="number" min="0" max="100" step="1" value="0" style="width:64px"> %</label>
+      <label style="color:var(--muted);font-size:13px" title="Hub plasmids are linked to many PLING communities and can crowd out the family your query belongs to">
+        <input id="blastNoHub" type="checkbox"> Hide hub plasmids</label>
       <span style="flex:1"></span>
       <button class="btn" id="blastRun" type="button">Run PLSDB search</button>
     </div>
@@ -771,6 +773,11 @@
 
   const PLSDB_SEQ_URL = "/api/plsdb";
 
+  // Hub plasmids (PLING) can be left out of the hits with the "Hide hub plasmids" box.
+  const isHub = id => { if (!graph.hasNode(id)) return false;
+    const a = graph.getNodeAttributes(id); return a.hub === true || a.is_hub === true || String(a.is_hub).toLowerCase() === "true"; };
+  const shownHits = res => $("blastNoHub").checked ? res.hits.filter(h => !(h.in_graph && isHub(h.plasmid))) : res.hits;
+
   function showHitsPanel() {
     const list = [...hits.values()].sort((x, y) => x.rank - y.rank);
     info.innerHTML = `<h2>PLSDB hits in the graph (${list.length})</h2>
@@ -787,7 +794,7 @@
 
   function showHitsInGraph(focusId) {
     hits = new Map();
-    lastResult.hits.forEach((h, i) => {
+    shownHits(lastResult).forEach((h, i) => {
       if (h.in_graph && graph.hasNode(h.plasmid)) {
         hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h));
       }
@@ -817,6 +824,8 @@
   }
 
   function renderResults(res) {
+    const hubsHidden = res.hits.length - shownHits(res).length;
+    res = Object.assign({}, res, { hits: shownHits(res) });
     const inGraph = res.hits.filter(h => h.in_graph).length;
     const isMash = res.method !== "blastn";
     $("blastStatus").className = "hint";
@@ -824,7 +833,8 @@
       ? ` · filters: identity ≥ ${res.min_identity}%, cover/hashes ≥ ${res.min_coverage}% (${res.before_filter} hits before filtering)` : "";
     $("blastStatus").textContent = (res.hits.length
       ? `Query ${res.query_length.toLocaleString()} bp (${res.method}) · ${res.hits.length} hits (${inGraph} in the graph), best first`
-      : `Query ${res.query_length.toLocaleString()} bp (${res.method}) · no hits pass thresholds`) + filt + ".";
+      : `Query ${res.query_length.toLocaleString()} bp (${res.method}) · no hits pass thresholds`) + filt +
+      (hubsHidden ? ` · ${hubsHidden} hub plasmid${hubsHidden > 1 ? "s" : ""} hidden` : "") + ".";
     if (!res.hits.length) { $("blastResults").innerHTML = ""; return; }
     const g = id => graph.hasNode(id) ? graph.getNodeAttributes(id) : null;
     $("blastResults").innerHTML = `<div class="row"><button class="btn" id="showHits" type="button">Show all ${inGraph} hits in the graph</button></div>
@@ -1158,6 +1168,9 @@
     if (groupSel !== null) selectGroup(groupSel);     // second Escape clears the legend group
   });
   $("blastRun").onclick = runBlast;
+  $("blastNoHub").onchange = () => { if (!lastResult) return; renderResults(lastResult);
+    if (hits.size) { hits = new Map(); shownHits(lastResult).forEach((h, i) => {
+      if (h.in_graph && graph.hasNode(h.plasmid)) hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h)); }); select(null); } };
   $("blastFile").onchange = e => {
     const f = e.target.files[0]; if (!f) return;
     const rd = new FileReader(); rd.onload = () => { $("blastSeq").value = rd.result; }; rd.readAsText(f);
