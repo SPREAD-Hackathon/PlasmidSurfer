@@ -396,7 +396,7 @@
     if (rafId) return;
     rafId = requestAnimationFrame(() => {
       rafId = 0;
-      renderer.refresh({ skipIndexation: true });
+      renderer.refresh();
     });
   }
 
@@ -548,19 +548,33 @@
 
   function showHitsInGraph(focusId) {
     hits = new Map();
-    lastResult.hits.forEach((h, i) => { if (h.in_graph) hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h)); });
+    lastResult.hits.forEach((h, i) => {
+      if (h.in_graph && graph.hasNode(h.plasmid)) {
+        hits.set(h.plasmid, Object.assign({ rank: i + 1 }, h));
+      }
+    });
     $("blastModal").hidden = true;
-    if (focusId) { select(focusId, true); return; }
+    if (focusId && graph.hasNode(focusId)) {
+      select(focusId, true);
+      return;
+    }
     select(null);
-    let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     hits.forEach((h, id) => {
       const d = renderer.getNodeDisplayData(id);
-      if (d) { x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x); y0 = Math.min(y0, d.y); y1 = Math.max(y1, d.y); }
+      if (d && Number.isFinite(d.x) && Number.isFinite(d.y)) {
+        x0 = Math.min(x0, d.x); x1 = Math.max(x1, d.x);
+        y0 = Math.min(y0, d.y); y1 = Math.max(y1, d.y);
+      }
     });
-    if (hits.size && x0 <= x1) renderer.getCamera().animate({
-      x: (x0 + x1) / 2, y: (y0 + y1) / 2,
-      ratio: Math.min(1, Math.max(0.02, Math.max(x1 - x0, y1 - y0) * 1.4))
-    }, { duration: 600 });
+    if (hits.size && x0 <= x1) {
+      const span = Math.max(x1 - x0, y1 - y0);
+      renderer.getCamera().animate({
+        x: (x0 + x1) / 2,
+        y: (y0 + y1) / 2,
+        ratio: Math.min(1, Math.max(0.12, span * 1.4))
+      }, { duration: 600 });
+    }
   }
 
   function renderResults(res) {
@@ -597,8 +611,16 @@
           <td>${a ? esc(giant ? a.pling_type : a.community) : '<span class="hint">not in graph</span>'}</td></tr>`;
       }).join("")}
       </tbody></table>`;
-    $("showHits").onclick = () => showHitsInGraph();
-    $("blastResults").querySelectorAll("tr.go").forEach(tr => tr.onclick = () => showHitsInGraph(tr.dataset.id));
+    $("showHits").onclick = e => {
+      e.stopPropagation();
+      showHitsInGraph();
+    };
+    $("blastResults").querySelectorAll("tr.go").forEach(tr => {
+      tr.onclick = e => {
+        e.stopPropagation();
+        showHitsInGraph(tr.dataset.id);
+      };
+    });
   }
 
   // Parse JSON when possible, but preserve plain-text/HTML error responses too.
@@ -626,8 +648,6 @@
     const failedLabels = ["failed", "error", "no job id", "invalid post", "failure"];
     if (!failedLabels.includes(label)) return;
 
-    // Keep the complete server payload in the console. The visible error includes
-    // the most useful fields, plus a bounded JSON representation for diagnosis.
     console.error(`PLSDB ${stage} failure; complete response:`, jobData);
     const detail = jobData.error || jobData.message || jobData.detail ||
       jobData.reason || jobData.description || jobData.stderr || jobData.traceback;
@@ -689,31 +709,29 @@
     try {
       const formData = new FormData();
 
-    // FASTA input
-    formData.append(
-    "fasta_file",
-    new Blob([raw], { type: "text/plain" }),
-    "query.fasta"
-    );
+      // FASTA input
+      formData.append(
+        "fasta_file",
+        new Blob([raw], { type: "text/plain" }),
+        "query.fasta"
+      );
 
-    // Search method
-    formData.append("search_type", searchType);
+      // Search method
+      formData.append("search_type", searchType);
 
-  // Mash parameters.
-  // Broad thresholds initially: apply the user's identity and coverage
-  // filters locally after retrieving the results.
-    formData.append("mash_max_v", "1");
-    formData.append("mash_max_d", "1");
-    formData.append("mash_min_i", "0");
-    formData.append("mash_screen_w", "false");
-    formData.append("mash_dist_i", "false");
+      // Mash parameters
+      formData.append("mash_max_v", "1");
+      formData.append("mash_max_d", "1");
+      formData.append("mash_min_i", "0");
+      formData.append("mash_screen_w", "false");
+      formData.append("mash_dist_i", "false");
 
-    // BLASTn parameters
-    formData.append("blastn_min_i", String(minId));
-    formData.append("blastn_min_c", String(minCov));
+      // BLASTn parameters
+      formData.append("blastn_min_i", String(minId));
+      formData.append("blastn_min_c", String(minCov));
 
-    // tBLASTn parameter, included for compatibility with the API
-    formData.append("tblastn_min_c", "90");
+      // tBLASTn parameter, included for compatibility with the API
+      formData.append("tblastn_min_c", "90");
 
       // Submit through the same-origin Vercel serverless proxy.
       let response = await fetch(PLSDB_SEQ_URL, {
@@ -763,10 +781,6 @@
         }
       }
 
-      // PLSDB response formats:
-      // 1. Current API: { results: { ..., result: [...] } }
-      // 2. DataFrame: { results: { columns: [...], data: [...] } }
-      // 3. Legacy: direct array or { results: [...] }
       let resultTable = jobData.results;
       if (typeof resultTable === "string") {
         try {
@@ -917,43 +931,38 @@
   })();
 
   function select(n, move) {
-    // A programmatic selection (e.g. clicking a PLSDB hit) must take priority
-    // over any node that Sigma may still consider hovered.
-    selected = n;
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    selected = (n && graph.hasNode(n)) ? n : null;
     hovered = null;
 
     setFocus();
-    showInfo(n);
-    scheduleRefresh();
+    showInfo(selected);
+    // Run refresh synchronously so display coordinates are ready before camera animation
+    renderer.refresh();
 
-    if (n && move) {
-      const p = renderer.getNodeDisplayData(n);
+    if (selected && move) {
+      const p = renderer.getNodeDisplayData(selected);
+      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+
       let span = 0;
-
       focus.forEach(m => {
         const q = renderer.getNodeDisplayData(m);
-        if (q && p) {
-          span = Math.max(
-            span,
-            Math.abs(q.x - p.x),
-            Math.abs(q.y - p.y)
-          );
+        if (q && Number.isFinite(q.x) && Number.isFinite(q.y)) {
+          span = Math.max(span, Math.abs(q.x - p.x), Math.abs(q.y - p.y));
         }
       });
 
-      // Avoid an extreme zoom-in when a hit has only one or two very close
-      // neighbours. Sigma camera ratios below 0.08 can make the graph appear
-      // to disappear even though the nodes are still present.
       const ratio = focus.size > 1
-        ? Math.min(1, Math.max(0.08, span * 3))
-        : (big ? 0.08 : 0.5);
+        ? Math.min(1, Math.max(0.12, span * 3))
+        : (big ? 0.12 : 0.5);
 
-      if (p) {
-        renderer.getCamera().animate(
-          { x: p.x, y: p.y, ratio },
-          { duration: 500 }
-        );
-      }
+      renderer.getCamera().animate(
+        { x: p.x, y: p.y, ratio },
+        { duration: 500 }
+      );
     }
   }
 
