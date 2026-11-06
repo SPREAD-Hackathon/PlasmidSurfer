@@ -688,17 +688,32 @@
 
     try {
       const formData = new FormData();
-      formData.append(
-        "fasta_file",
-        new Blob([raw], { type: "text/plain" }),
-        "query.fasta"
-      );
-      formData.append("search_type", searchType);
 
-      if (searchType === "blastn") {
-        formData.append("blastn_min_i", String(minId));
-        formData.append("blastn_min_c", String(minCov));
-      }
+    // FASTA input
+    formData.append(
+    "fasta_file",
+    new Blob([raw], { type: "text/plain" }),
+    "query.fasta"
+    );
+
+    // Search method
+    formData.append("search_type", searchType);
+
+  // Mash parameters.
+  // Broad thresholds initially: apply the user's identity and coverage
+  // filters locally after retrieving the results.
+    formData.append("mash_max_v", "1");
+    formData.append("mash_max_d", "1");
+    formData.append("mash_min_i", "0");
+    formData.append("mash_screen_w", "false");
+    formData.append("mash_dist_i", "false");
+
+    // BLASTn parameters
+    formData.append("blastn_min_i", String(minId));
+    formData.append("blastn_min_c", String(minCov));
+
+    // tBLASTn parameter, included for compatibility with the API
+    formData.append("tblastn_min_c", "90");
 
       // Submit through the same-origin Vercel serverless proxy.
       let response = await fetch(PLSDB_SEQ_URL, {
