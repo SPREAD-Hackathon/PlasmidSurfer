@@ -131,9 +131,6 @@ wesbite/                      the website (deployed on Vercel)
 ├── logo.png, mark.png        logos
 └── lib/                      sigma.js, graphology (vendored)
 
-build_dataset.py, train.py,   the machine-learning dissemination model
-score.py, figures.py,         (see docs/RISK_MODEL.md)
-learning_curve.py
 ```
 
 ---
@@ -162,11 +159,17 @@ python3 -m http.server 8000
 
 <!-- Add names, affiliations, roles and links -->
 
-| Name | Affiliation | Role |
+| Name | GitHub user | ORCID ID |
 |---|---|---|
-| [Name] | [Institution] | [e.g. PLING analysis, website, risk scoring] |
-| [Name] | [Institution] | [Role] |
-| [Name] | [Institution] | [Role] |
+| Manuel Ares-Arroyo | [ares-arroyo](https://github.com/ares-arroyo) |  |
+| Riccardo Bollini | [riccabolla](https://github.com/riccabolla) | |
+| Riccardo Polani | [riccardopolani-max](https://github.com/riccardopolani-max) | |
+| Anurag Kumar Bari | [AnuragKumarBari](https://github.com/AnuragKumarBari)||
+| Laura Monge-Olivares | [lauramonge9](https://github.com/lauramonge9) | |
+| Angel Molina Guillen | [anmogu](https://github.com/anmogu)| |
+| Miriam Russell | [miriam-russell](https://github.com/miriam-russell) | |
+| Christian Owusu-Nyantaki | [reiychris](https://github.com/Reiychris) | |
+| George Kitundu | [eorgekit](https://github.com/EorgeKit) | |
 
 Developed at the **[SPREAD Hackathon, place, date]**.
 
