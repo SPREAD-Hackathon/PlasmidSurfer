@@ -4,6 +4,16 @@
 
 <h3 align="center">Find a plasmid's relatives, see where they have been, and judge how worried to be.</h3>
 
+
+<p align="center">
+  <img src="https://img.shields.io/badge/SPREAD_Hackathon_2026-Winner-gold" alt="Hackathon Winner">
+</p>
+
+<p align="center">
+  🏆 <strong>Winner — SPREAD Plasmid Hackathon 2026</strong>
+</p>
+  
+
 <p align="center">
   <a href="https://plasmidsurfer.vercel.app/"><b>🌐 Open the website</b></a> ·
   <a href="#what-you-can-do-on-the-website">Features</a> ·
